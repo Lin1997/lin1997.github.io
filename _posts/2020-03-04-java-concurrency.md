@@ -638,7 +638,7 @@ void ObjectSynchronizer::fast_enter(Handle obj, BasicLock* lock,
 
 这里开始还是要判断 UseBiasedLocking，如果是 true 的话，就真的开始执行优化逻辑，否则还是会 fall back 到 slow_enter 的。是不是感觉判断 UseBiasedLocking 有点啰嗦？其实不是的，因为这个函数在很多地方都会调用的，因此判断是必要的！为了方便接下来的代码分析，下面我要放出 [OpenJDK 官方 wiki](https://wiki.openjdk.java.net/display/HotSpot/Synchronization) 中针对锁优化的原理图：
 ![原版](/assets/posts/header_word_layout_and_object_states.gif)
-***
+___
 ![中文版](/assets/posts/header_word_layout_and_object_states_cn.jfif)
 
 这张图咋一看，很复杂，你可能看不懂。但是，相信我，如果你仔细看完下面的代码分析并且自己结合 JVM 源码尝试理解，你肯定会完全吃透这张图。
@@ -751,7 +751,7 @@ biased_lock | lock | 状态
 
 ![before_lock](/assets/posts/before_lock.png)
 
-***
+___
 
 ![after_lock](/assets/posts/after_lock.png)
 
