@@ -767,7 +767,7 @@ biased_lock | lock | 状态
 
 ### inflate 成为重锁
 
-从 fas_enter 函数中可以看到，大部分情况下，我们会执行到 slow_enter 函数中：
+从 fast_enter 函数中可以看到，大部分情况下，我们会执行到 slow_enter 函数中：
 
 ```cpp
 // Interpreter/Compiler Slow Case
@@ -856,11 +856,47 @@ if (mark->has_locker() &&
 
 如果发现当前对象已经锁定，需要判断下是不是当前线程自己锁定了，因为在 synchronized 中可能再一次 synchronized，这种情况下就直接返回即可。
 
-如果上面的两个判断都失败了，也就是对象被锁定，并且锁定线程不是当前线程，这个时候需要执行上面 OpenJDK wiki 中的 inflate 膨胀逻辑。所谓膨胀，就是根据当前锁对象，生成一个 ObjectMonitor 对象，这个对象中保存了 sychronized 阻塞的队列，以及实现了不同的队列调度策略，下面我们重点看下 ObjectMonitor 中的 enter 逻辑（inflate 逻辑不是十分复杂，但是代码量较大，主要是在判断一堆 obj 的状态和检查，这里就不再分析了）。
+如果上面的两个判断都失败了，也就是对象被锁定，并且锁定线程不是当前线程，这个时候需要执行上面 OpenJDK wiki 中的 inflate 膨胀逻辑。所谓膨胀，就是根据当前锁对象，生成一个 ObjectMonitor 对象，这个对象中保存了 sychronized 阻塞的队列，以及实现了不同的队列调度策略。
+ObjectMonitor 的构造函数如下：
+
+```cpp
+class ObjectMonitor {
+  ...
+ public:
+  // initialize the monitor, exception the semaphore, all other fields
+  // are simple integers or pointers
+  ObjectMonitor() {
+    _header       = NULL;   // displaced object header word - mark
+    _count        = 0;      // reference count to prevent reclaimation/deflation
+                            // at stop-the-world time.  See deflate_idle_monitors().
+                            // _count is approximately |_WaitSet| + |_EntryList|
+    _waiters      = 0,      // number of waiting threads
+    _recursions   = 0;      // recursion count, 0 for first entry
+    _object       = NULL;   // backward object pointer - strong root
+    _owner        = NULL;   // pointer to owning thread OR BasicLock
+    _WaitSet      = NULL;   // LL of threads wait()ing on the monitor
+    _WaitSetLock  = 0 ;     // protects Wait Queue - simple spinlock
+    _Responsible  = NULL ;
+    _succ         = NULL ;  // Heir presumptive thread - used for futile wakeup throttling
+    _cxq          = NULL ;  // LL of recently-arrived threads blocked on entry.
+                            // The list is actually composed of WaitNodes, acting
+                            // as proxies for Threads.
+    FreeNext      = NULL ;
+    _EntryList    = NULL ;  // Threads blocked on entry or reentry.
+    _SpinFreq     = 0 ;     // Spin 1-out-of-N attempts: success rate
+    _SpinClock    = 0 ;
+    OwnerIsThread = 0 ;     // _owner is (Thread *) vs SP/BasicLock
+    _previous_owner_tid = 0;  // thread id of the previous owner of the monitor
+  }
+  ...
+}
+  ```
+
+下面我们重点看下 ObjectMonitor 中的 enter 逻辑（inflate 逻辑不是十分复杂，但是代码量较大，主要是在判断一堆 obj 的状态和检查，这里就不再分析了）。
 
 ### ObjectMonitor enter
 
-在 enter 函数中，有很多判断和优化执行的逻辑，但是核心和通过 **EnterI** 函数实际进入队列将当前线程阻塞：
+在 enter 函数中，有很多判断和优化执行的逻辑，但是核心是通过 **EnterI** 函数实际进入队列将当前线程阻塞：
 
 ```cpp
 void ObjectMonitor::EnterI(TRAPS) {
@@ -986,23 +1022,23 @@ class ObjectWaiter : public StackObj {
 如果你看到 _next 和 _prev 你就会立即明白，这是需要使用双向队列实现等待队列的节奏（但是实际上，下面入队操作并没有形成双向链表，真正形成双向链表时在 exit 的时候，下面分析 exit 的时候会看到这个逻辑）。node 节点创建完毕之后会执行如下入队操作（为了方便大家阅读，我把上面的入队逻辑 copy 过来了）：
 
 ```cpp
-  // Push "Self" onto the front of the _cxq.
-  // Once on cxq/EntryList, Self stays on-queue until it acquires the lock.
-  // Note that spinning tends to reduce the rate at which threads
-  // enqueue and dequeue on EntryList|cxq.
-  ObjectWaiter * nxt;
-  for (;;) {
-    node._next = nxt = _cxq;
-    if (Atomic::cmpxchg(&node, &_cxq, nxt) == nxt) break;
-    // Interference - the CAS failed because _cxq changed.  Just retry.
-    // As an optional optimization we retry the lock.
-    if (TryLock (Self) > 0) {
-      assert(_succ != Self, "invariant");
-      assert(_owner == Self, "invariant");
-      assert(_Responsible != Self, "invariant");
-      return;
-    }
+// Push "Self" onto the front of the _cxq.
+// Once on cxq/EntryList, Self stays on-queue until it acquires the lock.
+// Note that spinning tends to reduce the rate at which threads
+// enqueue and dequeue on EntryList|cxq.
+ObjectWaiter * nxt;
+for (;;) {
+  node._next = nxt = _cxq;
+  if (Atomic::cmpxchg(&node, &_cxq, nxt) == nxt) break;
+  // Interference - the CAS failed because _cxq changed.  Just retry.
+  // As an optional optimization we retry the lock.
+  if (TryLock (Self) > 0) {
+    assert(_succ != Self, "invariant");
+    assert(_owner == Self, "invariant");
+    assert(_Responsible != Self, "invariant");
+    return;
   }
+}
 ```
 
 正如注释中说的那样，我们是要将当前节点放到 CXQ 队列的头部，将节点的 next 指针通过 cas 操作指向 _cxq 指针就完成了入队操作。如果入队成功，则退出当前循环，否则再次尝试 lock，因为可能这个时候会成功。这里使用循环操作 cas 的逻辑，就是处理在高并发的状态下 cas 锁定失败问题，这一点和 JUC 中的 atomic 类的很多 update 操作是一致的。
@@ -1059,7 +1095,7 @@ void os::PlatformEvent::park() {
 }
 ```
 
-从这里，我们一下子就明白这里的实现方法，其实就是通过 pthread 的 condition wait 函数是下你 pthread 线程的等待。
+从这里，我们一下子就明白这里的实现方法，其实就是通过 pthread 的 condition wait 函数实现 pthread 线程的等待。
 
 当线程获得了锁可以进入时，也就是上面的循环退出来的时候，这个时候需要执行一个重要的操作，就是将 _Responsible 置为 NULL：
 
