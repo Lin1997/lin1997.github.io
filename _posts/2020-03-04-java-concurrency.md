@@ -7,7 +7,7 @@ tags:
     - 源码
 ---
 
-**本文转载至：[Java并发之基石篇](https://createchance.github.io/post/java-并发之基石篇)**
+**本文转载至：[Java并发之基石篇](https://createchance.github.io/post/java-并发之基石篇)**（修改部分笔误）
 
 > 作者：createchance
 邮箱：createchance@163.com
