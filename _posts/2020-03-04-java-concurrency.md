@@ -638,7 +638,9 @@ void ObjectSynchronizer::fast_enter(Handle obj, BasicLock* lock,
 
 这里开始还是要判断 UseBiasedLocking，如果是 true 的话，就真的开始执行优化逻辑，否则还是会 fall back 到 slow_enter 的。是不是感觉判断 UseBiasedLocking 有点啰嗦？其实不是的，因为这个函数在很多地方都会调用的，因此判断是必要的！为了方便接下来的代码分析，下面我要放出 [OpenJDK 官方 wiki](https://wiki.openjdk.java.net/display/HotSpot/Synchronization) 中针对锁优化的原理图：
 ![原版](/assets/posts/header_word_layout_and_object_states.gif)
-____
+
+---
+
 ![中文版](/assets/posts/header_word_layout_and_object_states_cn.jfif)
 
 这张图咋一看，很复杂，你可能看不懂。但是，相信我，如果你仔细看完下面的代码分析并且自己结合 JVM 源码尝试理解，你肯定会完全吃透这张图。
@@ -751,7 +753,7 @@ biased_lock | lock | 状态
 
 ![before_lock](/assets/posts/before_lock.png)
 
-____
+---
 
 ![after_lock](/assets/posts/after_lock.png)
 
@@ -1633,8 +1635,6 @@ Thread 0 end!!!!!!
 
 这种模式对应模式 4，这种模式只是将 EntryList 放在 cxq 的后面，然后按照新的 EntryList 队列开始唤醒线程
 
-<div STYLE="page-break-after: always;"></div>
-
 ## Object wait 和 notify 的实现机制
 
 Java Object 类提供了一个基于 native 实现的 wait 和 notify 线程间通讯的方式，这是除了 synchronized 之外的另外一块独立的并发基础部分，有关 wait 和 notify 的部分内容，我们在上面分析 monitor 的 exit 的时候已经有一些涉及，但是并没有过多的深入，导致留下了不少的疑问，下面本小节会详细分析一下在 HotSpot JVM 中的 wait 和 notify 的实现逻辑。
@@ -1650,7 +1650,7 @@ static {
 
 这里是不是和前面的 Thread 类如出一辙，因此查找 JVM 中的本地实现函数也是一样的手段。所以这里就省略这个查找的部分，相信聪明的你已经知道怎么在 JVM 代码中找实现的函数了。如果一路查找的话，你会发现 wait 和 notify/notifyAll 还是在 src/hotspot/share/runtime/objectMonitor.cpp 中实现的。因此我们还是会在这个文件中进行分析。
 
-#### wait 实现
+### wait 实现
 
 ObjectMonitor 类中的 wait 函数实现如下：
 
@@ -1679,7 +1679,7 @@ void ObjectMonitor::wait(jlong millis, bool interruptible, TRAPS) {
   
   ...
   // exit the monitor
-  exit(true, Self); 
+  exit(true, Self);
   ...
   if (interruptible && (Thread::is_interrupted(THREAD, false) || HAS_PENDING_EXCEPTION)) {
         // Intentionally empty
@@ -1725,7 +1725,7 @@ void Thread::SpinAcquire(volatile int * adr, const char * LockName) {
 }
 ```
 
-从函数的名称就能看出这是一个自旋锁的实现，并不会「立即」使得线程陷入等待状态，从实现上看，这里是通过一个死循环不断通过 cas 检查判断是否获得锁。这里开始会通过一个 cas 检查看下是否能够成功，如果成功的话就不用进行下面比较重量级的 spin 过程。如果获取失败，就需要进入下面的 spin 过程，这里的 spin 逻辑是一个比较有意思的算法。这里定义了一个 ctr 变量，其实就是 counter 计数器的意思，(ctr &amp; 0xFFF) == 0 || !os::is_MP() 这个条件比较有意思，意思是说如果我尝试的次数大于 0xfff，或者当前系统是一个单核处理器系统，那么就执行下面的逻辑。可以看到这里的 spin 是有一定的限度的。首先开始的时候，如果是多核系统，会直接执行 SpinPause ，我们看下 SpinPause 函数的实现，这个函数是实现 CPU 的忙等待，因此会有不同系统和 CPU 架构的对应实现：
+从函数的名称就能看出这是一个自旋锁的实现，并不会「立即」使得线程陷入等待状态，从实现上看，这里是通过一个死循环不断通过 cas 检查判断是否获得锁。这里开始会通过一个 cas 检查看下是否能够成功，如果成功的话就不用进行下面比较重量级的 spin 过程。如果获取失败，就需要进入下面的 spin 过程，这里的 spin 逻辑是一个比较有意思的算法。这里定义了一个 ctr 变量，其实就是 counter 计数器的意思，```(ctr &amp; 0xFFF) == 0 || !os::is_MP()``` 这个条件比较有意思，意思是说如果我尝试的次数大于 0xfff，或者当前系统是一个单核处理器系统，那么就执行下面的逻辑。可以看到这里的 spin 是有一定的限度的。首先开始的时候，如果是多核系统，会直接执行 SpinPause ，我们看下 SpinPause 函数的实现，这个函数是实现 CPU 的忙等待，因此会有不同系统和 CPU 架构的对应实现：
 
 ![SpinPause_impl](/assets/posts/SpinPause_impl.png)
 
@@ -1738,7 +1738,6 @@ void Thread::SpinAcquire(volatile int * adr, const char * LockName) {
 ```
 
 是的，你没有看错，这里的实现就是没有实现，只是返回一个 0 就完事！其实你想想，通过调用一个立即返回的空函数不就实现了 CPU 的忙等待了么？只不过这种实现方式比较不太优雅罢了～我们再来看 **SpinAcquire** 函数的实现，如果我们尝试的次数已经到了 0xFFF 次的话，那就表示我们需要使用另外一种机制来实现忙等了，因为这里尝试获取锁不能预测多久可以获得，因此不可能无限期地执行上面调用空函数，这是对资源的一种极大的浪费。如果尝试了 0xFFF 次还没有成功的话，就通过如下方式实现等待：
-
 
 ```cpp
 if (Yields > 5) {
@@ -1831,7 +1830,7 @@ if (interruptible && (Thread::is_interrupted(THREAD, false) || HAS_PENDING_EXCEP
 
 在 wait 接下来的函数，就是 park 阻塞唤醒之后的善后逻辑，对于我们的分析不是十分重要，这里就跳过。接下来，我们重点分析一下 notify 唤醒的逻辑。
 
-#### notify 实现
+### notify 实现
 
 notify 函数的实现如下：
 
@@ -1956,7 +1955,7 @@ inline void ObjectMonitor::DequeueSpecificWaiter(ObjectWaiter* node) {
 
 上面，我们看到了 JVM 的默认策略是 2，下面我们分别分析一下不同的策略逻辑。
 
-##### 唤醒策略 0
+#### 唤醒策略 0
 
 策略 0 的执行逻辑如下：
 
@@ -2082,7 +2081,7 @@ Thread 0 end!!!!!!
 
 可以看到线程结束运行的顺序和我们分析的一样，就是 2 -&gt; 1 -&gt; 0。
 
-##### 唤醒策略 1
+#### 唤醒策略 1
 
 策略 1 和策略 0 逻辑是相似，只是这里将节点放到尾部：
 
@@ -2123,7 +2122,7 @@ Thread 2 end!!!!!!
 
 可以看到，这里的结束的顺序和策略 0 是相反的。
 
-##### 唤醒策略 2——默认策略
+#### 唤醒策略 2——默认策略
 
 策略 0 和策略 1 是将需要唤醒的节点放到 EntryLIst 中，而策略 2 和策略 3 是将节点放到 cxq 队列中，只不过策略 2 放到 cxq 的头部，策略 3 放到 cxq 的尾部。
 
@@ -2280,6 +2279,7 @@ if (list == NULL) {
 因此，在 exit 的时候，在默认状态下会实现唤醒 EntryList 中线程，然后在唤醒 cxq 中的，所以唤醒的顺序是：0 -&gt; 2 -&gt; 1 -&gt; 6 -&gt; 5 -&gt; 4。
 
 下面我们执行代码，验证我们的猜想：
+
 ```bash
 Thread 0 start!!!!!!
 Thread 1 start!!!!!!
@@ -2300,7 +2300,7 @@ Thread 4 end!!!!!!
 
 可以看到，和我们的猜想完全一样。
 
-##### 唤醒策略 3
+#### 唤醒策略 3
 
 策略 3 的逻辑和策略 2 比较相似，只是策略 3 会将节点放到 cxq 尾部:
 
@@ -2349,7 +2349,7 @@ Thread 2 end!!!!!!
 
 到这里我们就完整分析完毕了 notify 的实现逻辑，整体上的实现还是比较简单的，只是根据不同的策略执行不同的唤醒出队逻辑，同时这里的逻辑会和 exit 中的出队逻辑协调起来，上面我们已经通过实际的例子验证了这一点。
 
-#### notifyAll 实现
+### notifyAll 实现
 
 notifyAll 的实现其实和 notify 实现大同小异：
 
@@ -2423,7 +2423,7 @@ gcc -S -O3 main.c -o main.s
 
 得到如下汇编代码：
 
-```x86asm
+```nasm
 	.section	__TEXT,__text,regular,pure_instructions
 	.macosx_version_min 10, 13
 	.globl	_main                   ## -- Begin function main
@@ -2460,7 +2460,7 @@ int main(void)
 
 可以得到如下汇编：
 
-```x86asm
+```nasm
 	.section	__TEXT,__text,regular,pure_instructions
 	.macosx_version_min 10, 13
 	.globl	_main                   ## -- Begin function main
