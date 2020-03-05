@@ -515,7 +515,7 @@ public class SyncTest {
 }
 ```
 
-针对其中同步的部分我们会看到如下字节码：
+使用```javap```命令对*.class文件进行反汇编，针对其中同步的部分我们会看到如下字节码：
 
 ```bash
 monitorenter
@@ -604,7 +604,7 @@ IRT_ENTRY_NO_ASYNC(void, InterpreterRuntime::monitorenter(JavaThread* thread, Ba
 IRT_END
 ```
 
-上面的代码，在原始的代码基础上有删减，保留了核心关键逻辑。其实这里的逻辑很简单，就是根据 UseBiasedLocking 这个变量分别执行 fast_enter 或者 slow_enter 的逻辑。从 UseBiasedLocking 这个变量的名称就能看出来，这是 JVM 1.6 之后默认使能的偏置锁优化，可以通过 JVM 启动参数 -XX:+/-UseBiasedLocking 来控制开关。什么？你问我什么是偏置锁？ok，别慌，下面我们就要开讲了。
+上面的代码，在原始的代码基础上有删减，保留了核心关键逻辑。其实这里的逻辑很简单，就是根据 UseBiasedLocking 这个变量分别执行 fast_enter 或者 slow_enter 的逻辑。从 UseBiasedLocking 这个变量的名称就能看出来，这是 JVM 1.6 之后默认使能的偏置锁优化，可以通过 JVM 启动参数 ```-XX:+/-UseBiasedLocking``` 来控制开关。什么？你问我什么是偏置锁？ok，别慌，下面我们就要开讲了。
 
 ### 同步锁优化处理
 
@@ -700,7 +700,7 @@ Space losses: 0 bytes internal + 3 bytes external = 3 bytes total
 
 填充部分：上面的对象头和对象体长度的总和为 13 字节，因为 JVM 的内存是以 8 字节长度对齐的，因此这里需要填充 3 个字节的长度是的整体的长度等于 16 字节
 
-上面我们说明了下一个 java 对象的内存布局，上面我们展示的是 JVM 启用了 oop 压缩技术的结果，你可以通过 -XX:-UseCompressedOops 来关闭它，关闭之后的布局如下图（这是标准的内存布局）：
+上面我们说明了下一个 java 对象的内存布局，上面我们展示的是 JVM 启用了 oop 压缩技术的结果，你可以通过 ```-XX:-UseCompressedOops``` 来关闭它，关闭之后的布局如下图（这是标准的内存布局）：
 
 ![object_layout](/assets/posts/object_layout.png)
 
@@ -733,10 +733,10 @@ Space losses: 0 bytes internal + 3 bytes external = 3 bytes total
 
 biased_lock | lock | 状态
 ------------|------|-----
-1 | 01 | 可偏置、但未锁且未偏置
-0 | 01 | 已解锁、不可偏置
-- | 00 | 轻量级锁定
-- | 01 | 重量级锁定
+1           | 01   | 可偏置、但未锁且未偏置
+0           | 01   | 已解锁、不可偏置
+-           | 00   | 轻量级锁定
+-           | 10   | 重量级锁定
 
 具体的内容参考 [OpenJDK wiki](https://wiki.openjdk.java.net/display/HotSpot/Synchronization) 中的图，为了方便描述，这里再贴一次：
 
@@ -749,7 +749,7 @@ biased_lock | lock | 状态
 
 以上两种情况的操作是不同的，下面分别讲述。
 
-第一种情况，由于对象的状态是偏置对象并且未锁定，因此首先讲对象状态置为不可偏置对象并且未锁定。然后在线程的栈空间新建一个 lock record 的空间，用于存储对象目前的 mark word 的拷贝，然后虚拟机将使用 CAS 操作尝试将对象的 mark word 更新指向 lock record 空间。如果这个更新成功了，那么这个线程就拥有了该对象的锁，并且 mark word 的锁标志位变成 00，表示当前对象锁处于轻量级锁定状态，这个过程如下图所示（上图是锁定前，下图是锁定后）：
+第一种情况，由于对象的状态是偏置对象并且未锁定，因此首先将对象状态置为不可偏置对象并且未锁定。然后在线程的栈空间新建一个 lock record 的空间，用于存储对象目前的 mark word 的拷贝，然后虚拟机将使用 CAS 操作尝试将对象的 mark word 更新指向 lock record 空间。如果这个更新成功了，那么这个线程就拥有了该对象的锁，并且 mark word 的锁标志位变成 00，表示当前对象锁处于轻量级锁定状态，这个过程如下图所示（上图是锁定前，下图是锁定后）：
 
 ![before_lock](/assets/posts/before_lock.png)
 
@@ -2568,7 +2568,7 @@ public class Hello {
 java -XX:+PrintAssembly -XX:CompileCommand=dontinline,Count.testMethod -XX:CompileCommand=compileonly,Count.testMethod Hello > out
 ```
 
-这里解释一下上面的命令，首先我们使用 -XX:+PrintAssembly 参数使用 hsdis 插件获取 JIT 机器码，然后通过 XX:CompileCommand 参数指定不要将我们的代码内联优化，并且只编译 Count.testMethod 方法，其他方法我们不关心。
+这里解释一下上面的命令，首先我们使用 ```-XX:+PrintAssembly``` 参数使用 hsdis 插件获取 JIT 机器码，然后通过 XX:CompileCommand 参数指定不要将我们的代码内联优化，并且只编译 Count.testMethod 方法，其他方法我们不关心。
 
 如果上面的命令顺利执行，我们会得到 out 输出文件，这个文件非常长，这里我们只看 testMethod 方法执行的机器码：
 
