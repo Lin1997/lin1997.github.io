@@ -7,7 +7,7 @@ tags:
     - 源码
 ---
 
-**本文转载至：[Java并发之基石篇](https://createchance.github.io/post/java-并发之基石篇)**（修改部分笔误）
+**本文转载至：[Java并发之基石篇](https://createchance.github.io/post/java-并发之基石篇)**（有改动）
 
 > 作者：createchance
 邮箱：createchance@163.com
@@ -1940,6 +1940,8 @@ static int Knob_MoveNotifyee        = 2;
 3. 策略 2：将需要唤醒的 node 放到 CXQ 的头部
 4. 策略 3：将需要唤醒的 node 放到 CXQ 的尾部
 
+> PS：当然，对于策略2 （默认），当EntryList为空时，该node会放到CXQ中，后文会解释。
+
 在分析不同策略的逻辑之前，我们先看下 WaitSet 的出队逻辑的实现，这是 INotify 函数开始会执行的事情：
 
 ```cpp
@@ -2626,11 +2628,18 @@ java -XX:+PrintAssembly -XX:CompileCommand=dontinline,Count.testMethod -XX:Compi
   0x00000001116b125c: test   %eax,(%r10)        ;   {poll_return}
 ```
 
-我们在代码中针对变量进行 ++ 自增操作，因此可以看到首先通过 mov 读取原始值，然后通过 inc 指令将值增加 1，然后再通过 mov 指令将新的值推送到栈中，然后通过一个 lock addl 指令将 rsp 栈中的数据加 0，然后 ++ 自增操作就完毕了。前面的三个步骤我们都能明白，只是最后一个 lock addl 将 rsp 加 0 不太好理解，这里将一个值加 0 不相当于什么都没做吗？这句话是废话吗？其实不是的，我们需要了解下 lock 这个指令前缀是在做什么，我们需要查阅下 intel 的 IA32 指令开发者手册看下这个指令前缀的定义（LOCK—Assert LOCK# Signal Prefix 小节）：
+我们在代码中针对变量进行 ++ 自增操作，因此可以看到首先通过 mov 读取原始值，然后通过 inc 指令将值增加 1，然后再通过 mov 指令将新的值推送到栈中，然后通过一个 lock addl 指令将 rsp 栈中的数据加 0，然后 ++ 自增操作就完毕了。前面的三个步骤我们都能明白，只是最后一个 lock addl 将 rsp 加 0 不太好理解，这里将一个值加 0 不相当于什么都没做吗？这句话是废话吗？其实不是的，我们需要了解下 lock 这个指令前缀是在做什么，我们需要查阅下 Intel 的 IA32 指令开发者手册 看下这个指令前缀的定义（[“LOCK—Assert LOCK# Signal Prefix” in Chapter 3, “Instruction Set Reference, A-L”](https://software.intel.com/sites/default/files/managed/39/c5/325462-sdm-vol-1-2abcd-3abcd.pdf#page=1158)）：
 
-![signal_prefix](/assets/posts/signal_prefix.png)
+> Causes the processor’s LOCK# signal to be asserted during execution of the accompanying instruction **(turns the instruction into an atomic instruction)**. In a multiprocessor environment, the LOCK# signal ensures that the processor **has exclusive use of any shared memory** while the signal is asserted.  
+The LOCK prefix can be prepended only to the following instructions and only to those forms of the instructions where the destination operand is a memory operand: ADD, ADC, AND, BTC, BTR, BTS, CMPXCHG, CMPXCH8B, CMPXCHG16B, DEC, INC, NEG, NOT, OR, SBB, SUB, XOR, XADD, and XCHG. If the LOCK prefix is used with one of these instructions and the source operand is a memory operand, an undefined opcode exception (#UD) may be generated. An undefined opcode exception will also be generated if the LOCK prefix is used with any instruction not in the above list. The XCHG instruction always asserts the LOCK# signal regardless of the presence or absence of the LOCK prefix.  
+The LOCK prefix is typically used with the BTS instruction to perform a read-modify-write operation on a memory location in shared memory environment.  
+The integrity of the LOCK prefix is not affected by the alignment of the memory field. Memory locking is observed for arbitrarily misaligned fields.
 
-可以看到这里描述，是说通过 lock 可以在共享内存的系统上使得被修饰的指令成为一个排他性指令，也就是说只要这个指令在执行了可以保证如下两件事情：
+8.1.4小节中说明了该指令对Caches的效果，"[Effects of a LOCK Operation on Internal Processor Caches](https://software.intel.com/sites/default/files/managed/39/c5/325462-sdm-vol-1-2abcd-3abcd.pdf#page=3055)"：
+> For the Intel486 and Pentium processors, the LOCK# signal is always asserted on the bus during a LOCK operation, even if the area of memory being locked is cached in the processor.  
+For the P6 and more recent processor families, if the area of memory being locked during a LOCK operation is cached in the processor that is performing the LOCK operation as write-back memory and is completely contained in a cache line, the processor may not assert the LOCK# signal on the bus. Instead, it will modify the memory location internally and allow it’s cache coherency mechanism to ensure that the operation is carried out atomically. This operation is called “cache locking.” **The cache coherency mechanism automatically prevents two or more processors that have cached the same area of memory from simultaneously modifying data in that area**.
+
+可以看到这里描述，是说通过 lock 可以在共享内存的系统上使得被修饰的指令成为一个排他性指令，并且防止其它处理器缓存被修改的共享内存，也就是说只要这个指令在执行了可以保证如下两件事情：
 
 1. 修改完成的内容值，其他 CPU 核心可以立即看到
 2. 修改的时候，其他 CPU 不能操作这个值，并且在 lock 之前的指令不能重排到这句话的后面
@@ -2680,7 +2689,7 @@ java -XX:+PrintAssembly -XX:CompileCommand=dontinline,Count.testMethod -XX:Compi
 14. [Performance Improvements of Contended Java Monitor from JDK 6 to 9](https://vmlens.com/articles/performance-improvements-of-java-monitor/)
 15. [Java 内存访问重排序的研究](https://tech.meituan.com/2014/09/23/java-memory-reordering.html)
 16. [JVM PrintAssembly](https://wiki.openjdk.java.net/display/HotSpot/PrintAssembly)
-17. [Intel IA32 Dev](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-instruction-set-reference-manual-325383.pdf)
+17. [Intel IA32 Dev](https://software.intel.com/sites/default/files/managed/39/c5/325462-sdm-vol-1-2abcd-3abcd.pdf)
 18. [Java 对象内存布局](https://cgiirw.github.io/2018/04/16/JVM_Oop_Desc/)
 
 ### C/C++ 相关的
