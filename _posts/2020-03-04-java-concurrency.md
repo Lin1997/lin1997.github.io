@@ -1663,13 +1663,10 @@ Thread 0 end!!!!!!
 
 到这里，我们全部分析完了 exit 的执行逻辑，exit 中的重点就是 EntryList 和 cxq 队列的出队策略。下面我们总结下，出队策略总体上可以分为两组：
 
-1. EntryList 优先于 cxq
-
-这种模式对应模式 0 、模式 1和模式 3，其中模式 0，这两种模式区别就是模式 0 对 cxq 队列会保持「后来者居上」的队列顺序，而模式 1 会 reverse 这个顺序，模式 3 不会变更任何顺序，只是简单地将 cxq 链表放在 EntryList 的后面
-
-1. cxq 优先于 EntryList
-
-这种模式对应模式 4，这种模式只是将 EntryList 放在 cxq 的后面，然后按照新的 EntryList 队列开始唤醒线程
+1. EntryList 优先于 cxq  
+这种模式对应模式 0 、模式 1和模式 3。其中模式 0 对 cxq 队列会保持「后来者居上」的队列顺序，而模式 1 会 reverse 这个顺序，模式 3 不会变更任何顺序，只是简单地将 cxq 链表放在 EntryList 的后面
+2. cxq 优先于 EntryList  
+这种模式对应模式 2 、模式 4。其中模式2中若cxq不为空则优先取cxq，而模式4只是将 EntryList 放在 cxq 的后面，然后按照新的 EntryList 队列开始唤醒线程
 
 ## Object wait 和 notify 的实现机制
 
