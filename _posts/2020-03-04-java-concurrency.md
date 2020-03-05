@@ -22,28 +22,28 @@ tags:
 
 在阅读本文之前，你需要：
 
-1.  了解 Java 中的基本的线程使用方式以及注意点
-2.  了解 Java 中的基本线程间通讯的方式
-3.  了解 Java 中的 volatile 的基本语义
-4.  了解 C/C++ 编程
-5.  了解 JNI 的相关开发知识
-6.  了解一些 x86 的汇编（仅仅是很简单的内容，要求能读懂）
+1. 了解 Java 中的基本的线程使用方式以及注意点
+2. 了解 Java 中的基本线程间通讯的方式
+3. 了解 Java 中的 volatile 的基本语义
+4. 了解 C/C++ 编程
+5. 了解 JNI 的相关开发知识
+6. 了解一些 x86 的汇编（仅仅是很简单的内容，要求能读懂）
 
 本文重点分析内容：
 
-1.  共享内存多核系统基本架构与设计
-2.  Java 内存模型设计
-3.  Java Thread 的创建与停止
-4.  Java synchonized 的实现机制
-5.  Java Object 的 wait 和 notify/notifyAll 实现机制
-6.  Java volatile 关键字的实现方式
+1. 共享内存多核系统基本架构与设计
+2. Java 内存模型设计
+3. Java Thread 的创建与停止
+4. Java synchonized 的实现机制
+5. Java Object 的 wait 和 notify/notifyAll 实现机制
+6. Java volatile 关键字的实现方式
 
 阅读建议：
 
-1.  下载一份 HotSpot JVM 11 的代码，了解基本代码架构，并且本地能够编译和调试，如何编译或者调试可以参考 OpenJDK wiki 或者 周志明的《深入理解 Java 虚拟机：第二版》一书
-2.  使用你熟悉的 IDE 导入 JVM 的源码，建议使用 eclipse CDT，其他的 IDE 笔者都觉得不是很方便
-3.  在阅读的过程中，不能仅仅看本文的分析，需要结合起来，自己下断点或者打印日志调试，并且不断反复尝试，反复理解核心代码片段
-4.  最后一点建议，现代 JVM 的实现非常复杂，会涉及到很多的操作系统、算法、硬件、统设计以及性能调优等等方便的知识，所以在阅读源码的时候千万不要深入无关代码的细节部分，否则你会陷于无边无际的代码海洋而无法自拔～
+1. 下载一份 HotSpot JVM 11 的代码，了解基本代码架构，并且本地能够编译和调试，如何编译或者调试可以参考 OpenJDK wiki 或者 周志明的《深入理解 Java 虚拟机：第二版》一书
+2. 使用你熟悉的 IDE 导入 JVM 的源码，建议使用 eclipse CDT，其他的 IDE 笔者都觉得不是很方便
+3. 在阅读的过程中，不能仅仅看本文的分析，需要结合起来，自己下断点或者打印日志调试，并且不断反复尝试，反复理解核心代码片段
+4. 最后一点建议，现代 JVM 的实现非常复杂，会涉及到很多的操作系统、算法、硬件、统设计以及性能调优等等方便的知识，所以在阅读源码的时候千万不要深入无关代码的细节部分，否则你会陷于无边无际的代码海洋而无法自拔～
 
 本文非常长，笔者写了一个多星期，纯属手打，文中的观点和分析均是本人经过反复的试验和分析得出的，同时借鉴了很多网络上的文章，这些借鉴的内容已经放到文末的参考资料中，在此非常感谢这些作者的分享。真心希望你可以认真读完，我敢保证，只要你认真读完，肯定收获很多，加油～
 
@@ -98,10 +98,10 @@ Java 在 1.5 版本中引入了 [JSR 133 标准](https://jcp.org/en/jsr/detail?i
 
 下面分别介绍下上面图中涉及的 4 种操作：
 
-1.  read：Java 执行引擎访问本地工作内存中的变量副本，如果变量副本无效（变量副本不存在也是无效的一种），那就去主存中获取，同时在本地工作内存中缓存一份
-2.  write：Java 执行引擎将最新的变量值赋值给工作内存中的变量副本，同时需要判断是否需要将这个新的值立即同步给主内存，如果需要同步的话，还需要配合 lock 操作
-3.  lock：Java 执行引擎将主内存中的变量锁定，锁定的含义有：其他的线程在此之后不能访问这个变量直到本线程 unlock；一旦锁定，其他线程针对这个变量的操作必须等待
-4.  unlock：Java 执行引擎将主内存中的变量解锁，解锁之后才能：各个线程并发访问这个变量；某个线程再次锁定
+1. read：Java 执行引擎访问本地工作内存中的变量副本，如果变量副本无效（变量副本不存在也是无效的一种），那就去主存中获取，同时在本地工作内存中缓存一份
+2. write：Java 执行引擎将最新的变量值赋值给工作内存中的变量副本，同时需要判断是否需要将这个新的值立即同步给主内存，如果需要同步的话，还需要配合 lock 操作
+3. lock：Java 执行引擎将主内存中的变量锁定，锁定的含义有：其他的线程在此之后不能访问这个变量直到本线程 unlock；一旦锁定，其他线程针对这个变量的操作必须等待
+4. unlock：Java 执行引擎将主内存中的变量解锁，解锁之后才能：各个线程并发访问这个变量；某个线程再次锁定
 
 ## Java Thread 创建
 
@@ -135,20 +135,20 @@ private native void stop0(Object o);
 private native void suspend0();
 private native void resume0();
 private native void interrupt0();
-private native void setNativeName(String name);	
+private native void setNativeName(String name);
 ```
 
 这些方法，不用说你肯定非常熟悉，这里就不赘述了。
 
 在进入代码量及其巨大且复杂的 OpenJDK 之前有几点想说明下：
 
-1.  所有用的源代码都是从 OpenJDK 官方下载的 HotSpot JVM 代码，版本 11
-2.  分析的时候我会将代码中的注释一起放上来，方便大家阅读
-3.  分析的时候，我们只关注重点的代码，也就是核心功能代码，细节暂时不会关心
+1. 所有用的源代码都是从 OpenJDK 官方下载的 HotSpot JVM 代码，版本 11
+2. 分析的时候我会将代码中的注释一起放上来，方便大家阅读
+3. 分析的时候，我们只关注重点的代码，也就是核心功能代码，细节暂时不会关心
 
 好的，现在我们打开 OpenJDK 11 的代码（至于下载源码，请参考 [OpenJDK wiki](https://wiki.openjdk.java.net/)；使用什么 IDE 打开全看你的心情，我是使用 eclipse cdt），全局搜索如下内容：
 `java_lang_Thread_registerNatives`
-什么？你问我为啥搜这个？如果你有这个疑问的话，可以先看下 [JNI 的内容 ](https://blog.csdn.net/createchance/article/details/53783490)～这里简单地说下，这种内容是 JNI 默认的java 方法和 native 方法对应的方式，JVM 运行的时候会通过这种方式查找本地符号表中的符号的符号，然后直接跳转过去～
+什么？你问我为啥搜这个？如果你有这个疑问的话，可以先看下 [JNI 的内容](https://blog.csdn.net/createchance/article/details/53783490)～这里简单地说下，这种内容是 JNI 默认的java 方法和 native 方法对应的方式，JVM 运行的时候会通过这种方式查找本地符号表中的符号的符号，然后直接跳转过去～
 
 我们搜索之后可以看到在`src/java.base/share/native/libjava/Thread.c`中定了这个函数：
 
@@ -744,8 +744,8 @@ biased_lock | lock | 状态
 
 下面我们针对上面的那张图解释一下，首先解释一下什么是偏置锁。所谓偏置，就是偏向某一个线程的意思，也就是说这个锁首先假设自己被偏向的线程持有。在单个线程连续持有锁的时候，偏向锁就起作用了。如果一个线程连续不停滴获取锁，那么获取的过程中如果没有发生竞态，那么可以跳过繁重的同步过程，直接就获得锁执行，这样可以大大提高性能。偏向锁是 JDK 1.6 中引入的一项锁优化手段，它的目的就是消除数据在无争用的情况下的同步操作，进一步提高运行性能。这里还涉及到了轻量级锁，轻量级锁也是 JDK 1.6 引入的一个锁优化机制，所谓轻量级是相对于使用操作系统互斥机制来实现传统锁而言的，在这个角度上，传统的方式就是重量级锁，所谓重量级的原因是同步的方式是一种悲观锁，会导致线程的状态切换，而线程状态的切换是一个相当重量级的操作。在 JVM 6 以上版本中，默认使能偏置优化技术，因此上面的图中，只要分配了新的对象，都会指定左图中的逻辑。首先一个新的对象处于未锁定、未偏置但是可以偏置的状态，也就是上面表格的第一行，这个时候如果有个线程来获取这个对象锁，那么就直接进入已偏置状态，这个状态和未偏置状态的差别就是原来开头的 25 bit 的 hash code 变成了 23 bit 的 thread 指针和 2 bit 的分代信息，那么原始的信息去哪里了呢？其实就存储到获取到锁的线程栈中了，后面我们会在代码中看到这一点。经过这一步的操作，我们就在对象头部存储上了线程指针信息，标记这个对象的锁已经被这个线程持有了，相当于表明：此花已有主。下次当这个线程在此获取这个锁的时候，只要状态没有发生变化，所需要的开销就是一次指针的比较运算，而这个运算是非常轻量的。但是在某个线程持有这个对象锁的时候，如果有另外一个线程来竞争了，锁的偏置状态结束，会触发撤销偏置的逻辑，这个时候可以分为如下两个情况（持有锁的线程称为 线程 A，竞争的称为 线程 B）：
 
-1.  线程 B 到达的时候，线程 A 已经放开对象锁，此时对象锁处于的状态是：偏置对象、未锁定
-2.  线程 B 到达的时候，线程 A 正持有这个锁，此时对象处于的状态是：偏置对象，已锁定
+1. 线程 B 到达的时候，线程 A 已经放开对象锁，此时对象锁处于的状态是：偏置对象、未锁定
+2. 线程 B 到达的时候，线程 A 正持有这个锁，此时对象处于的状态是：偏置对象，已锁定
 
 以上两种情况的操作是不同的，下面分别讲述。
 
@@ -986,7 +986,7 @@ class ObjectWaiter : public StackObj {
 如果你看到 _next 和 _prev 你就会立即明白，这是需要使用双向队列实现等待队列的节奏（但是实际上，下面入队操作并没有形成双向链表，真正形成双向链表时在 exit 的时候，下面分析 exit 的时候会看到这个逻辑）。node 节点创建完毕之后会执行如下入队操作（为了方便大家阅读，我把上面的入队逻辑 copy 过来了）：
 
 ```cpp
-	// Push "Self" onto the front of the _cxq.
+  // Push "Self" onto the front of the _cxq.
   // Once on cxq/EntryList, Self stays on-queue until it acquires the lock.
   // Note that spinning tends to reduce the rate at which threads
   // enqueue and dequeue on EntryList|cxq.
@@ -1036,9 +1036,9 @@ for (;;) {
 
 这个循环中的逻辑比较简单，一眼就能看明白。主要执行三件事：
 
-1.  尝试获取锁
-2.  park 当前线程
-3.  再次尝试获取锁
+1. 尝试获取锁
+2. park 当前线程
+3. 再次尝试获取锁
 
 重点在于第 2 步，我们知道 synchronzed 如果获取对象锁失败的话，会导致当前线程被阻塞，那么这个阻塞操作就是在这里完成的。这里需要注意的是，这里需要判断一下 _Responsible 指针，如果这个指针为 NULL，表示之前对象锁还没有等待线程，也就是说当前线程是第一个等待线程，这个时候通过 cas 操作将 _Responsible 指向 Self，表示当前线程是这个对象锁的等待线程。接下来，如果发现当前线程就是等待线程或者不是等待线程，那么执行的的逻辑是不一样的。如果是当前线程是等待线程，那么会执行一个简单的「退避算法」，进行一个短时间的阻塞等待。这个算法很简单，第一次等待 1 ms，第二次等待 8 ms，第三次等待 64 ms，以此类推，直到达到等待时长的上线：MAX_RECHECK_INTERVAL，这个 MAX_RECHECK_INTERVAL 的值默认是 1000 ms，也就是说在 synchronize 在一个对象锁上的线程，如果他是第一个等待线程的话，那么他会不停滴休眠、检查锁，休眠的时间由刚才的退避算法指定。如果当前线程不是第一个等待线程，那么只能执行无限期的休眠，一直等待对象锁的 exit 函数执行唤醒才行，这一点在下面分析 exit 函数的时候会说明。
 
@@ -1075,13 +1075,13 @@ if (_Responsible == Self) {
 
 上面我们理清了 ObjectMonitor enter 的逻辑，我们知道了如下几件事情：
 
-1.  ObjectMonitor 内部通过一个 CXQ 队列保存所有的等待线程
-2.  在实际进入队列之前，会反复尝试 lock，在某些系统上会存在 CPU 亲和力的优化
-3.  入队的时候，通过 ObjectWaiter 对象将当前线程包裹起来，并且入到 CXQ 队列的头部
-4.  入队成功以后，会根据当前线程是否为第一个等待线程做不同的处理
-5.  如果是第一个等待线程，会根据一个简单的「退避算法」来有条件的 wait
-6.  如果不是第一个等待线程，那么会执行无限期等待
-7.  线程的 park 在 posix 系统上是通过 pthread 的 condition wait 实现的
+1. ObjectMonitor 内部通过一个 CXQ 队列保存所有的等待线程
+2. 在实际进入队列之前，会反复尝试 lock，在某些系统上会存在 CPU 亲和力的优化
+3. 入队的时候，通过 ObjectWaiter 对象将当前线程包裹起来，并且入到 CXQ 队列的头部
+4. 入队成功以后，会根据当前线程是否为第一个等待线程做不同的处理
+5. 如果是第一个等待线程，会根据一个简单的「退避算法」来有条件的 wait
+6. 如果不是第一个等待线程，那么会执行无限期等待
+7. 线程的 park 在 posix 系统上是通过 pthread 的 condition wait 实现的
 
 当一个线程获得对象锁成功之后，就可以执行自定义的同步代码块了。执行完成之后会执行到 ObjectMonitor 的 exit 函数中，释放当前对象锁，方便下一个线程来获取这个锁，下面我们逐步分析下 exit 的实现过程。
 
@@ -1114,8 +1114,8 @@ void ObjectMonitor::exit(bool not_suspended, TRAPS) {
 
 上面的 exit 函数整体上分为如下几个部分：
 
-1.  根据 Knob_QMode 的值和 _cxq 是否为空执行不同策略
-2.  根据一定策略唤醒等待队列中的下一个线程
+1. 根据 Knob_QMode 的值和 _cxq 是否为空执行不同策略
+2. 根据一定策略唤醒等待队列中的下一个线程
 
 下面我们分两部分分析 exit 逻辑。
 
@@ -1627,11 +1627,11 @@ Thread 0 end!!!!!!
 
 到这里，我们全部分析完了 exit 的执行逻辑，exit 中的重点就是 EntryList 和 cxq 队列的出队策略。下面我们总结下，出队策略总体上可以分为两组：
 
-1.  EntryList 优先于 cxq
+1. EntryList 优先于 cxq
 
 这种模式对应模式 0 、模式 1和模式 3，其中模式 0，这两种模式区别就是模式 0 对 cxq 队列会保持「后来者居上」的队列顺序，而模式 1 会 reverse 这个顺序，模式 3 不会变更任何顺序，只是简单地将 cxq 链表放在 EntryList 的后面
 
-1.  cxq 优先于 EntryList
+1. cxq 优先于 EntryList
 
 这种模式对应模式 4，这种模式只是将 EntryList 放在 cxq 的后面，然后按照新的 EntryList 队列开始唤醒线程
 
@@ -1807,7 +1807,7 @@ inline void ObjectMonitor::AddWaiter(ObjectWaiter* node) {
 
 ```cpp
 // exit the monitor
-exit(true, Self); 
+exit(true, Self);
 ```
 
 是的，你肯定知道 Java  Object 的 wait 操作会释放 monitor 锁，释放操作就是这里实现的！
@@ -1902,10 +1902,10 @@ static int Knob_MoveNotifyee        = 2;
 
 从注释中可以看出，这个就是 notify 唤醒的策略定义。从上面的 INotify 函数的注释中可以看出总共有如下几种模式：
 
-1.  策略 0：将需要唤醒的 node 放到 EntryList 的头部
-2.  策略 1：将需要唤醒的 node 放到 EntryList 的尾部
-3.  策略 2：将需要唤醒的 node 放到 CXQ 的头部
-4.  策略 3：将需要唤醒的 node 放到 CXQ 的尾部
+1. 策略 0：将需要唤醒的 node 放到 EntryList 的头部
+2. 策略 1：将需要唤醒的 node 放到 EntryList 的尾部
+3. 策略 2：将需要唤醒的 node 放到 CXQ 的头部
+4. 策略 3：将需要唤醒的 node 放到 CXQ 的尾部
 
 在分析不同策略的逻辑之前，我们先看下 WaitSet 的出队逻辑的实现，这是 INotify 函数开始会执行的事情：
 
@@ -2380,9 +2380,9 @@ Volatile 这个话题是并行计算领域一个非常有意思的话题，涉�
 
 这里的解释有三个重要的含义：
 
-1.  likely：可能的，这意味着被 volatile 形容的对象「可能」发生改变，因此我们不应该针对这个变量的值作出任何假设
-2.  suddenly：突然地，这意味着这个变量有可能会在瞬间很快的发生变化
-3.  unexpectedly：不可预期地，这其实与 likely 的含义一致，意味着这个变量可能随时随地发生变化，我们不能依赖于它的状态
+1. likely：可能的，这意味着被 volatile 形容的对象「可能」发生改变，因此我们不应该针对这个变量的值作出任何假设
+2. suddenly：突然地，这意味着这个变量有可能会在瞬间很快的发生变化
+3. unexpectedly：不可预期地，这其实与 likely 的含义一致，意味着这个变量可能随时随地发生变化，我们不能依赖于它的状态
 
 因此，在编程语言中使用这个关键字修饰我们的变量，就意味着：这个变量可能会在任何时候改变为任何值，任何使用方必须实时关注这个值的变化，并且不能作出任何假设。
 
@@ -2396,8 +2396,8 @@ Volatile 这个话题是并行计算领域一个非常有意思的话题，涉�
 
 从这里的描述我们可以看出在 C 中对 volatile 的访问规则如下：
 
-1.  不允许被优化消失（optimized out）
-2.  不被编译器优化乱序（reorder）
+1. 不允许被优化消失（optimized out）
+2. 不被编译器优化乱序（reorder）
 
 下面我们通过一个简单的例子来了解下 C 中的 volatile 关键字。
 
@@ -2502,8 +2502,8 @@ _t:
 
 上面我们简单滴了解了在 c 中的 volatile 的语义，我们对 volatile 有了一个大致上的认识。那么在 java 中的 volatile 的语义又是什么呢？基本上如下：
 
-1.  保证在修改之后，其他的线程立即可见，这一点和 C 中的不对变量内存做任何假设是一致的
-2.  保证指令不会乱序执行，也就是说，执行到 volatile 变量的时候，在此之前的指令必须全部完成。这一点比 c 中的 volatile 更加彻底，因为 java 中的 volatile 实现底层采用了内存屏障技术保证了这一点
+1. 保证在修改之后，其他的线程立即可见，这一点和 C 中的不对变量内存做任何假设是一致的
+2. 保证指令不会乱序执行，也就是说，执行到 volatile 变量的时候，在此之前的指令必须全部完成。这一点比 c 中的 volatile 更加彻底，因为 java 中的 volatile 实现底层采用了内存屏障技术保证了这一点
 
 上面的第一个语义相信大家都了解，也很容易通过例子来验证。下面我们重点看下第二个特性是怎么保证的。我们知道 JVM 为了加快执行的效率，通常会采用 JIT 来优化代码执行的速度，也就是说，经过 JIT compile 之后的代码，就不会再执行字节码了，而是直接执行对应的底层机器码。如果我们能够有办法拿到 JIT 执行的对应机器码，我们不就能窥探到 JVM 底层在执行 volatile 变量的存取时的执行逻辑了吗？是的，我们真的可以获取到 JVM 底层的 JIT 机器代码，在 OpenJDK 的源码中提供了一个非常强大的工具：hsdis，关于这个工具的介绍可以参考源码中的 README：/src/utils/hsdis/README。我们需要编译下这个工具，编译的时候需要 binutils 这个 GNU 工具集合的源码，我们只要将下载好的 binutils 代码放到同一个目录下，然后执行如下命令即可编译 hsdis：
 
@@ -2599,8 +2599,8 @@ java -XX:+PrintAssembly -XX:CompileCommand=dontinline,Count.testMethod -XX:Compi
 
 可以看到这里描述，是说通过 lock 可以在共享内存的系统上使得被修饰的指令成为一个排他性指令，也就是说只要这个指令在执行了可以保证如下两件事情：
 
-1.  修改完成的内容值，其他 CPU 核心可以立即看到
-2.  修改的时候，其他 CPU 不能操作这个值，并且在 lock 之前的指令不能重排到这句话的后面
+1. 修改完成的内容值，其他 CPU 核心可以立即看到
+2. 修改的时候，其他 CPU 不能操作这个值，并且在 lock 之前的指令不能重排到这句话的后面
 
 这其实就是 java 中的 volatile 的语义啊～
 
@@ -2614,8 +2614,8 @@ java -XX:+PrintAssembly -XX:CompileCommand=dontinline,Count.testMethod -XX:Compi
 
 探索底层技术是复杂的，也是枯燥的，因为这部分的内容有如下困难：
 
-1.  原理复杂
-2.  网上的资料及其稀少甚至没有，只能自己实验，不断尝试，不断失败，不断努力才能获得知识
+1. 原理复杂
+2. 网上的资料及其稀少甚至没有，只能自己实验，不断尝试，不断失败，不断努力才能获得知识
 
 但是，一旦你学会了研究底层技术的基本套路，那么你的技术发展道路将会出现不一样的风景，你不会对新技术感到迷茫，因为你知道这些东西知识换汤不换药，基本的机制和理论已经稳定了若干年了，在理论没有突破的情况下，技术上的突破是很难的。
 
@@ -2625,44 +2625,44 @@ java -XX:+PrintAssembly -XX:CompileCommand=dontinline,Count.testMethod -XX:Compi
 
 ### 基础理论
 
-1.  [多处理器编程艺术](https://book.douban.com/subject/3901836/)
-2.  [深入理解并行编程](https://book.douban.com/subject/27078711/)
-3.  [Introduction to Parallel Computing](https://computing.llnl.gov/tutorials/parallel_comp/)
+1. [多处理器编程艺术](https://book.douban.com/subject/3901836/)
+2. [深入理解并行编程](https://book.douban.com/subject/27078711/)
+3. [Introduction to Parallel Computing](https://computing.llnl.gov/tutorials/parallel_comp/)
 
 ### Java 实践
 
-1.  [深入理解Java虚拟机（第2版）](https://book.douban.com/subject/24722612/)
-2.  [Java并发编程实战](https://book.douban.com/subject/10484692/)
-3.  [Java并发编程之美](https://book.douban.com/subject/30351286/)
-4.  [concurrent programming in java design principles and pattern](https://book.douban.com/subject/1440218/)
-5.  [The Java Virtual Machine Instruction Set](https://docs.oracle.com/javase/specs/jvms/se8/html/jvms-6.html#jvms-6.5.getfield)
-6.  [JSR 133](https://download.oracle.com/otndocs/jcp/memory_model-1.0-pfd-spec-oth-JSpec/)
-7.  [Thread and Locks](https://docs.oracle.com/javase/specs/jvms/se6/html/Threads.doc.html)
-8.  [JSR 133 中文版](http://ifeve.com/wp-content/uploads/2014/03/JSR133中文版.pdf)
-9.  [The JSR-133 Cookbook for Compiler Writers by Doug Lea](http://gee.cs.oswego.edu/dl/jmm/cookbook.html)
-10.  [Synchronization and Object Locking](https://wiki.openjdk.java.net/display/HotSpot/Synchronization)
-11.  [Biased Locking in HotSpot](https://blogs.oracle.com/dave/biased-locking-in-hotspot)
-12.  [Memory Barriers and JVM Concurrency](https://www.infoq.com/articles/memory_barriers_jvm_concurrency/)
-13.  [Memory barrier](https://en.wikipedia.org/wiki/Memory_barrier)
-14.  [Performance Improvements of Contended Java Monitor from JDK 6 to 9](https://vmlens.com/articles/performance-improvements-of-java-monitor/)
-15.  [Java 内存访问重排序的研究](https://tech.meituan.com/2014/09/23/java-memory-reordering.html)
-16.  [JVM PrintAssembly](https://wiki.openjdk.java.net/display/HotSpot/PrintAssembly)
-17.  [Intel IA32 Dev](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-instruction-set-reference-manual-325383.pdf)
-18.  [Java 对象内存布局](https://cgiirw.github.io/2018/04/16/JVM_Oop_Desc/)
+1. [深入理解Java虚拟机（第2版）](https://book.douban.com/subject/24722612/)
+2. [Java并发编程实战](https://book.douban.com/subject/10484692/)
+3. [Java并发编程之美](https://book.douban.com/subject/30351286/)
+4. [concurrent programming in java design principles and pattern](https://book.douban.com/subject/1440218/)
+5. [The Java Virtual Machine Instruction Set](https://docs.oracle.com/javase/specs/jvms/se8/html/jvms-6.html#jvms-6.5.getfield)
+6. [JSR 133](https://download.oracle.com/otndocs/jcp/memory_model-1.0-pfd-spec-oth-JSpec/)
+7. [Thread and Locks](https://docs.oracle.com/javase/specs/jvms/se6/html/Threads.doc.html)
+8. [JSR 133 中文版](http://ifeve.com/wp-content/uploads/2014/03/JSR133中文版.pdf)
+9. [The JSR-133 Cookbook for Compiler Writers by Doug Lea](http://gee.cs.oswego.edu/dl/jmm/cookbook.html)
+10. [Synchronization and Object Locking](https://wiki.openjdk.java.net/display/HotSpot/Synchronization)
+11. [Biased Locking in HotSpot](https://blogs.oracle.com/dave/biased-locking-in-hotspot)
+12. [Memory Barriers and JVM Concurrency](https://www.infoq.com/articles/memory_barriers_jvm_concurrency/)
+13. [Memory barrier](https://en.wikipedia.org/wiki/Memory_barrier)
+14. [Performance Improvements of Contended Java Monitor from JDK 6 to 9](https://vmlens.com/articles/performance-improvements-of-java-monitor/)
+15. [Java 内存访问重排序的研究](https://tech.meituan.com/2014/09/23/java-memory-reordering.html)
+16. [JVM PrintAssembly](https://wiki.openjdk.java.net/display/HotSpot/PrintAssembly)
+17. [Intel IA32 Dev](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-instruction-set-reference-manual-325383.pdf)
+18. [Java 对象内存布局](https://cgiirw.github.io/2018/04/16/JVM_Oop_Desc/)
 
 ### C/C++ 相关的
 
-1.  [C/C++ 中的 volatile 语义](https://liam.page/2018/01/18/volatile-in-C-and-Cpp/)
+1. [C/C++ 中的 volatile 语义](https://liam.page/2018/01/18/volatile-in-C-and-Cpp/)
 
 ### Pthread Library
 
-1.  [POSIX多线程程序设计中文版](https://book.douban.com/subject/1236825/)
-2.  [POSIX Threads Programming](https://computing.llnl.gov/tutorials/pthreads/)
+1. [POSIX多线程程序设计中文版](https://book.douban.com/subject/1236825/)
+2. [POSIX Threads Programming](https://computing.llnl.gov/tutorials/pthreads/)
 
 ### Papers
 
-1.  [Synchronization- Related Atomic Operations with Biased Locking and Bulk Rebiasing](https://pdfs.semanticscholar.org/bc8f/7a35b87b452924e180ed15b58f049bcac9db.pdf)
-2.  [Thin Lock](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.90.664&amp;rep=rep1&amp;type=pdf)
-3.  [JUC Framework by Doug Lea](http://gee.cs.oswego.edu/dl/papers/aqs.pdf)
-4.  [CLH Lock](ftp://ftp.cs.washington.edu/tr/1993/02/UW-CSE-93-02-02.pdf)
-5.  [MCS Lock](https://www.cs.rochester.edu/u/scott/papers/1991_TOCS_synch.pdf)
+1. [Synchronization- Related Atomic Operations with Biased Locking and Bulk Rebiasing](https://pdfs.semanticscholar.org/bc8f/7a35b87b452924e180ed15b58f049bcac9db.pdf)
+2. [Thin Lock](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.90.664&amp;rep=rep1&amp;type=pdf)
+3. [JUC Framework by Doug Lea](http://gee.cs.oswego.edu/dl/papers/aqs.pdf)
+4. [CLH Lock](ftp://ftp.cs.washington.edu/tr/1993/02/UW-CSE-93-02-02.pdf)
+5. [MCS Lock](https://www.cs.rochester.edu/u/scott/papers/1991_TOCS_synch.pdf)
