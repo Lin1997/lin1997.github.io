@@ -59,13 +59,13 @@ tags:
 
 号称一次编写，到处运行的 Java，其本身也是构建在不同的系统之上的，以其运行时 JVM 来屏蔽系统底层的差异。因此，在介绍 Java 并发体系之间，有必要简要介绍下计算机系统层面上的并发，以及面对的问题。
 
-我们的目的其实很简单，就是让计算机在同一时刻，能够运行更多的任务。而并行计算，提供了非常不错的解决方案。虽然这看起来很自然，但实际上面临着众多的问题，其中一个重大的问题就是绝大多数的计算不仅仅是 CPU 一个人的事，而是需要很多计算机系统部件共同参与。但是我们知道，计算机系统中运行速度最快就是 CPU，其他部件例如：内存、磁盘、网络等等都是及其缓慢的，同时这些操作在目前的计算机体系中是很难消除的，因为我们不可能仅仅靠寄存器就完成所有的计算任务。面对高速 CPU 和低速存储之间的鸿沟，如果想要实现高效数据通讯，一个良好的解决方案就是在它们之间添加一个 cache 层，这个 cache 层的速度和整体的速度关系如下：
+我们的目的其实很简单，就是让计算机在同一时刻，能够运行更多的任务。而并行计算，提供了非常不错的解决方案。虽然这看起来很自然，但实际上面临着众多的问题，其中一个重大的问题就是绝大多数的计算不仅仅是 CPU 自己的事，而是需要很多计算机系统部件共同参与。但是我们知道，计算机系统中运行速度最快就是 CPU，其他部件例如：内存、磁盘、网络等等都是及其缓慢的，同时这些操作在目前的计算机体系中是很难消除的，因为我们不可能仅仅靠寄存器就完成所有的计算任务。面对高速 CPU 和低速存储之间的鸿沟，如果想要实现高效数据通讯，一个良好的解决方案就是在它们之间添加一个 cache 层，这个 cache 层的速度和整体的速度关系如下：
 
 `CPU --> cache --> 存储`
 
 通过 cache 这个缓冲地带，实现 CPU 和存储之间的高效「对话」。这是计算机和软件领域通用的一个问题解决方案：增加中间层。没有什么问题是一个中间层解决不了的，如果有，那就两层。在运算的时候，CPU 将需要使用到的数据复制到 Cache 中，以后每次获取数据都从较为快速的 cache 中获取，加快访问速度。
 
-所谓理想很丰面，现实很骨感。这种计算体系有一个重要的问题需要解决，那就是：缓存一致性（cache coherence）问题。在现代的计算机系统中，主要都是多核系统为主。在这些计算机系统中，每一个 CPU 都拥有自己独立的高速缓存，但是因为主存只有一个，因此它们之间只能共享，这种系统也称为：共享内存多核系统（Shared-Memory multiprocessors System），如下图所示：
+所谓理想很丰满，现实很骨感。这种计算体系有一个重要的问题需要解决，那就是：缓存一致性（cache coherence）问题。在现代的计算机系统中，主要都是多核系统为主。在这些计算机系统中，每一个 CPU 都拥有自己独立的高速缓存，但是因为主存只有一个，因此它们之间只能共享，这种系统也称为：共享内存多核系统（Shared-Memory multiprocessors System），如下图所示：
 
 ![java_concurrency_share_memory_system](/assets/posts/java_concurrency_share_memory_system.png)
 
@@ -267,7 +267,7 @@ JVM_END
 native_thread = new JavaThread(&thread_entry, sz);
 ```
 
-这里创建了一个 JavaThread 对象，并且给了两个参数，第一个暂且不管，后面我们会重点说明，第二个是 stack size，也就是每一个线程的栈大小，这个参数可以在创建 Thread 对象的时候指定，也可以添加 JVM 启动参数：-XSS。进去看下：
+这里创建了一个 JavaThread 对象，并且给了两个参数，第一个暂且不管，后面我们会重点说明，第二个是 stack size，也就是每一个线程的栈大小，这个参数可以在创建 Thread 对象的时候指定，也可以添加 JVM 启动参数：`Xss`(设定每个线程的堆栈大小)。进去看下：
 
 ```cpp
 JavaThread::JavaThread(ThreadFunction entry_point, size_t stack_sz) :
@@ -620,13 +620,16 @@ IRT_END
 // extremely sensitive to race condition. Be careful.
 void ObjectSynchronizer::fast_enter(Handle obj, BasicLock* lock,
                                     bool attempt_rebias, TRAPS) {
+  //虚拟机参数判断是否开启了偏向锁
   if (UseBiasedLocking) {
+    //如果不处于全局安全点
     if (!SafepointSynchronize::is_at_safepoint()) {
+      //通过`revoke_and_rebias`这个函数尝试获取偏向锁
       BiasedLocking::Condition cond = BiasedLocking::revoke_and_rebias(obj, attempt_rebias, THREAD);
       if (cond == BiasedLocking::BIAS_REVOKED_AND_REBIASED) {
         return;
       }
-    } else {
+    } else {//如果在安全点，撤销偏向锁
       assert(!attempt_rebias, "can not rebias toward VM thread");
       BiasedLocking::revoke_at_safepoint(obj);
     }
@@ -727,6 +730,17 @@ Space losses: 0 bytes internal + 3 bytes external = 3 bytes total
 //  JavaThread*:54 epoch:2 cms_free:1 age:4    biased_lock:1 lock:2 (COOPs && biased object)
 //  narrowOop:32 unused:24 cms_free:1 unused:4 promo_bits:3 ----->| (COOPs && CMS promoted object)
 //  unused:21 size:35 -->| cms_free:1 unused:7 ------------------>| (COOPs && CMS free block)
+...
+//    [JavaThread* | epoch | age | 1 | 01]       lock is biased toward given thread
+//    [0           | epoch | age | 1 | 01]       lock is anonymously biased
+//
+//  - the two lock bits are used to describe three states: locked/unlocked and monitor.
+//
+//    [ptr             | 00]  locked             ptr points to real header on stack
+//    [header      | 0 | 01]  unlocked           regular object header
+//    [ptr             | 10]  monitor            inflated lock (header is wapped out)
+//    [ptr             | 11]  marked             used by markSweep to mark an object
+//                                               not valid at any other time
 ```
 
 在所有状态的前两个状态是我们需要重点关注的：normal object 和 biased object。仔细看这两部分的头定义，最后三个 bit 用来区分偏置锁和普通锁的部分，这里就和前面 OpenJDK wiki 中的图对上了，总结如下：
@@ -734,6 +748,7 @@ Space losses: 0 bytes internal + 3 bytes external = 3 bytes total
 biased_lock | lock | 状态
 ------------|------|-----
 1           | 01   | 可偏置、但未锁且未偏置
+1           | 01   | 已偏置、锁定或未锁定
 0           | 01   | 已解锁、不可偏置
 -           | 00   | 轻量级锁定
 -           | 10   | 重量级锁定
@@ -742,7 +757,7 @@ biased_lock | lock | 状态
 
 ![原版](/assets/posts/header_word_layout_and_object_states.gif)
 
-下面我们针对上面的那张图解释一下，首先解释一下什么是偏置锁。所谓偏置，就是偏向某一个线程的意思，也就是说这个锁首先假设自己被偏向的线程持有。在单个线程连续持有锁的时候，偏向锁就起作用了。如果一个线程连续不停滴获取锁，那么获取的过程中如果没有发生竞态，那么可以跳过繁重的同步过程，直接就获得锁执行，这样可以大大提高性能。偏向锁是 JDK 1.6 中引入的一项锁优化手段，它的目的就是消除数据在无争用的情况下的同步操作，进一步提高运行性能。这里还涉及到了轻量级锁，轻量级锁也是 JDK 1.6 引入的一个锁优化机制，所谓轻量级是相对于使用操作系统互斥机制来实现传统锁而言的，在这个角度上，传统的方式就是重量级锁，所谓重量级的原因是同步的方式是一种悲观锁，会导致线程的状态切换，而线程状态的切换是一个相当重量级的操作。在 JVM 6 以上版本中，默认使能偏置优化技术，因此上面的图中，只要分配了新的对象，都会指定左图中的逻辑。首先一个新的对象处于未锁定、未偏置但是可以偏置的状态，也就是上面表格的第一行，这个时候如果有个线程来获取这个对象锁，那么就直接进入已偏置状态，这个状态和未偏置状态的差别就是原来开头的 25 bit 的 hash code 变成了 23 bit 的 thread 指针和 2 bit 的分代信息，那么原始的信息去哪里了呢？其实就存储到获取到锁的线程栈中了，后面我们会在代码中看到这一点。经过这一步的操作，我们就在对象头部存储上了线程指针信息，标记这个对象的锁已经被这个线程持有了，相当于表明：此花已有主。下次当这个线程在此获取这个锁的时候，只要状态没有发生变化，所需要的开销就是一次指针的比较运算，而这个运算是非常轻量的。但是在某个线程持有这个对象锁的时候，如果有另外一个线程来竞争了，锁的偏置状态结束，会触发撤销偏置的逻辑，这个时候可以分为如下两个情况（持有锁的线程称为 线程 A，竞争的称为 线程 B）：
+下面我们针对上面的那张图解释一下，首先解释一下什么是偏置锁。所谓偏置，就是偏向某一个线程的意思，也就是说这个锁首先假设自己被偏向的线程持有。在单个线程连续持有锁的时候，偏向锁就起作用了。如果一个线程连续不停滴获取锁，那么获取的过程中如果没有发生竞态，那么可以跳过繁重的同步过程，直接就获得锁执行，这样可以大大提高性能。偏向锁是 JDK 1.6 中引入的一项锁优化手段，它的目的就是消除数据在无争用的情况下的同步操作，进一步提高运行性能。这里还涉及到了轻量级锁，轻量级锁也是 JDK 1.6 引入的一个锁优化机制，所谓轻量级是相对于使用操作系统互斥机制来实现传统锁而言的，在这个角度上，传统的方式就是重量级锁，所谓重量级的原因是同步的方式是一种悲观锁，会导致线程的状态切换，而线程状态的切换是一个相当重量级的操作。在 JVM 6 以上版本中，默认使能偏置优化技术，因此上面的图中，只要分配了新的对象，都会指定左图中的逻辑。首先一个新的对象处于未锁定、未偏置但是可以偏置的状态，也就是上面表格的第一行，这个时候如果有个线程来获取这个对象锁，那么就直接进入已偏置状态，在64位的JVM中，这个状态和未偏置状态的差别就是原来开头的 25 bit 的 unused 与 31bit 的 hash code 变成了 54 bit 的 thread 指针和 2 bit 的分代信息，那么原始的信息去哪里了呢？其实就存储到获取到锁的线程栈中了，后面我们会在代码中看到这一点。经过这一步的操作，我们就在对象头部存储上了线程指针信息，标记这个对象的锁已经被这个线程持有了，相当于表明：此花已有主。下次当这个线程在此获取这个锁的时候，只要状态没有发生变化，所需要的开销就是一次指针的比较运算，而这个运算是非常轻量的。但是在某个线程持有这个对象锁的时候，如果有另外一个线程来竞争了，锁的偏置状态结束，会触发撤销偏置的逻辑，这个时候可以分为如下两个情况（持有锁的线程称为 线程 A，竞争的称为 线程 B）：
 
 1. 线程 B 到达的时候，线程 A 已经放开对象锁，此时对象锁处于的状态是：偏置对象、未锁定
 2. 线程 B 到达的时候，线程 A 正持有这个锁，此时对象处于的状态是：偏置对象，已锁定
@@ -763,7 +778,87 @@ biased_lock | lock | 状态
 
 需要说明的是，偏置锁和轻量级锁的关系并不是互相取代或者竞争关系，而是属于在不同情况下的不同的锁优化手段。这里就需要提到在概念上的锁分类，通常可以分为：悲观锁和乐观锁。所谓悲观锁，就是认为如果我不做充分的同步的手段（包括执行重量级的操作）就肯定会出现问题；所谓乐观锁，就是会乐观地预估系统当前的状态，认为状态是符合预期的，因此不用重量级的同步也可以完成同步，如果不巧发生了竞态，就退避，然后再按照一定的策略重试。在 java 中，很多传统的同步方式（包括 synchronized，重入锁）都是悲观锁，在 java 9 中在 Thread 类中新加入了一个接口 onSpinWait 就是一种乐观锁，另外在 JUC 中很多的原子工具类都使用到了 CAS（Compare And Swap）操作，这种操作本质上是利用 CPU 提供的特定原子操作指令，基于冲突检测的方式来实现的一种乐观锁定的同步技术。
 
-上面我们详细介绍了 JVM 中的各种锁优化的技术细节，现在我们看下在 JVM 的代码实现上是如何操作的。在看到 fast_enter 函数的时候，看到了代码中有判断 safepoint 的地方，这里大家先不用关心，这个是和 JVM 的 GC 有关的内容，不是我们这里关心的内容。一般而言，都会执行到 _revoke_and_rebias_ 这个函数中，这个函数比较长，主要是在执行 OpenJDK wiki 中图的 revoke 和 rebias 操作，这里就不再深入代码细节分析了。
+上面我们详细介绍了 JVM 中的各种锁优化的技术细节，现在我们看下在 JVM 的代码实现上是如何操作的。在看到 fast_enter 函数的时候，看到了代码中有判断 safepoint 的地方，这里大家先不用关心，这个是和 JVM 的 GC 有关的内容，不是我们这里关心的内容。一般而言，都会执行到 _revoke_and_rebias_ 这个函数中，这个函数比较长，主要是在执行 OpenJDK wiki 中图的 revoke 和 rebias 操作。
+
+```cpp
+BiasedLocking::Condition BiasedLocking::revoke_and_rebias(Handle obj, bool attempt_rebias, TRAPS) {
+  //1：必须在安全点
+  assert(!SafepointSynchronize::is_at_safepoint(), "must not be called while at safepoint");
+  //2：读取对象头
+  markOop mark = obj->mark();
+  //is_biased_anonymously()判断mark是否为可偏向状态，即mark的偏向锁标志位为1，锁标志位为 01，线程id为null
+  //当计算hashCode时，进入此分支，会在一个非全局安全点进行偏向锁撤销(BIAS_REVOKED)
+  if (mark->is_biased_anonymously() && !attempt_rebias) {
+    markOop biased_value       = mark;
+    //创建一个非偏向的markword
+    markOop unbiased_prototype = markOopDesc::prototype()->set_age(mark->age());
+    //通过cas重新设置偏向锁状态
+    markOop res_mark = (markOop) Atomic::cmpxchg_ptr(unbiased_prototype, obj->mark_addr(), mark);
+    //如果CAS成功，返回偏向锁撤销状态
+    if (res_mark == biased_value) {
+      return BIAS_REVOKED;
+    }
+  } else if (mark->has_bias_pattern()) {
+    //如果锁对象为可偏向状态（biased_lock:1, lock:01，不管线程id是否为空）,尝试重新偏向
+    Klass* k = obj->klass();
+    markOop prototype_header = k->prototype_header();
+    //如果已经有线程对锁对象进行了全局锁定，则取消偏向锁操作
+    if (!prototype_header->has_bias_pattern()) {
+      // This object has a stale bias from before the bulk revocation
+      // for this data type occurred. It's pointless to update the
+      // heuristics at this point so simply update the header with a
+      // CAS. If we fail this race, the object's bias has been revoked
+      // by another thread so we simply return and let the caller deal
+      // with it.
+      markOop biased_value       = mark;
+      //CAS 更新对象头markword为非偏向锁
+      markOop res_mark = (markOop) Atomic::cmpxchg_ptr(prototype_header, obj->mark_addr(), mark);
+      assert(!(*(obj->mark_addr()))->has_bias_pattern(), "even if we raced, should still be revoked");
+      return BIAS_REVOKED;
+    } else if (prototype_header->bias_epoch() != mark->bias_epoch()) {//如果偏向锁过期，则进入当前分支
+      //如果允许尝试获取偏向锁
+      if (attempt_rebias) {
+        //fast_enter进入此分支！！！
+        assert(THREAD->is_Java_thread(), "");
+        markOop biased_value       = mark;
+        markOop rebiased_prototype = markOopDesc::encode((JavaThread*) THREAD, mark->age(), prototype_header->bias_epoch());
+        //通过CAS 操作， 将本线程的 ThreadID 、时间错、分代年龄尝试写入对象头中
+        markOop res_mark = (markOop) Atomic::cmpxchg_ptr(rebiased_prototype, obj->mark_addr(), mark);
+        //CAS成功，则返回撤销和重新偏向状态
+        if (res_mark == biased_value) {
+          return BIAS_REVOKED_AND_REBIASED;
+        }
+      } else {
+        //不尝试获取偏向锁，则取消偏向锁
+        markOop biased_value       = mark;
+        markOop unbiased_prototype = markOopDesc::prototype()->set_age(mark->age());
+        markOop res_mark = (markOop) Atomic::cmpxchg_ptr(unbiased_prototype, obj->mark_addr(), mark);
+        //如果CAS操作成功，返回偏向锁撤销状态
+        if (res_mark == biased_value) {
+          return BIAS_REVOKED;
+        }
+      }
+    }
+  }
+  ...
+}
+```
+
+`fast_enter`函数中调用了上述函数，最终进入```if (attempt_rebias)```分支，尝试获取偏向锁，通过CAS 操作， 将本线程的 ThreadID 、时间错、分代年龄尝试写入对象头中。若成功了则返回BIAS_REVOKED_AND_REBIASED，使`fast_enter` 返回，否则fast_enter将会 fall back 到 slow_enter。
+
+> 顺便提一下，如果如果我们没有重写默认的hashCode方法，默认的hashCode要通过`ObjectSynchronizer::FastHashCode`函数计算identity hashcode。
+>
+> ```cpp
+> intptr_t ObjectSynchronizer::FastHashCode (Thread * Self, oop obj) {
+>  if (UseBiasedLocking) {
+>   //  如果是可偏向状态
+>   if (obj->mark()->has_bias_pattern()) {
+>     ...
+>     BiasedLocking::revoke_and_rebias(hobj, false, JavaThread::current());
+>     ...
+> ```
+>
+> 通过`FastHashCode`实现我们发现，调用`revoke_and_rebias`时会进入```if (mark->is_biased_anonymously() && !attempt_rebias)```分支，从而撤销偏向锁，导致锁的膨胀。读者可以[自行编写代码验证](https://blog.csdn.net/P19777/article/details/103125545)。
 
 ### inflate 成为重锁
 
@@ -808,22 +903,20 @@ void ObjectSynchronizer::slow_enter(Handle obj, BasicLock* lock, TRAPS) {
 
 ```cpp
 bool is_neutral()  const {
-  // 这里的 biased_lock_mask_in_place 是 7
+  // 这里的 biased_lock_mask_in_place 是 7, 即二进制111
   // unlocked_value 值是 1
   return (mask_bits(value(), biased_lock_mask_in_place) == unlocked_value);
 }
 ```
 
-这里的判断也是比较简单的，就是将 mark word 中的最后 7 个 bit 进行掩码运算，将得到的值和 1 进行比较，如果等于 1 就表示对象是中立的，也就是没有被任何线程锁定，否则就失败。这里需要问一个问题，那就是为什么我们要对 mark word 的最后的 7 个 bit 进行掩码运算？这里我们就需要再次看下在 biase 模式下的对象 mark word 的布局（这里以 32 bit 为例，仍然是上面的 oopDesc 注释描述）：
+这里的判断也是比较简单的，就是将 mark word 中的最后 3 个 bit 进行掩码运算，将得到的值和 1(unlocked_value) 进行比较，如果等于 1 就表示对象是中立的，也就是没有被任何线程锁定，否则就失败。这里需要问一个问题，那就是为什么我们要对 mark word 的最后的 3 个 bit 进行掩码运算？这里我们就需要再次看下在 biase 模式下的对象 mark word 的布局（这里以 64 bit 为例，仍然是上面的 oopDesc 注释描述）：
 
 ```cpp
-hash:25 ------------>| age:4    biased_lock:1 lock:2 (normal object)
-JavaThread*:23 epoch:2 age:4    biased_lock:1 lock:2 (biased object)
-size:32 ------------------------------------------>| (CMS free block)
-PromotedObject*:29 ---------->| promo_bits:3 ----->| (CMS promoted object)
+unused:25 hash:31 -->| unused:1   age:4    biased_lock:1 lock:2 (normal object)
+JavaThread*:54 epoch:2 unused:1   age:4    biased_lock:1 lock:2 (biased object)
 ```
 
-可以看到，无论是普通对象或者是可偏置的对象，最后 7 个 bit 的格式是固定的，其他几种模式下，都是不确定的，因此我们需要通过掩码运算将最后 7 个 bit 运算出来。但是为什么要和 1 比较呢？这里我们再次看下上面 OpenJDK wiki 中的锁优化图，会发现在普通对象的时候，也就是 biase revoke 时 unlock 状态下的 header 最后三个 bit 就是 001，也就是十进制的 1！所以这里通过简单高效的二进制运算就获得了对象的锁定状态。
+可以看到，无论是普通对象或者是可偏置的对象，最后 3 个 bit 的格式是固定的，我们再次看下上面 OpenJDK wiki 中的锁优化图，会发现在普通对象的时候，也就是 biase revoke 时 unlock 状态下的 header 最后三个 bit 就是 001，也就是十进制的 1！所以这里通过简单高效的二进制运算就获得了对象的锁定状态。
 
 再次回到上面的 slow_enter 函数，如果判断为中立的，也就是没有锁定的话，会执行：
 
