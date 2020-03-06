@@ -2691,6 +2691,7 @@ For the P6 and more recent processor families, if the area of memory being locke
 16. [JVM PrintAssembly](https://wiki.openjdk.java.net/display/HotSpot/PrintAssembly)
 17. [Intel IA32 Dev](https://software.intel.com/sites/default/files/managed/39/c5/325462-sdm-vol-1-2abcd-3abcd.pdf)
 18. [Java 对象内存布局](https://cgiirw.github.io/2018/04/16/JVM_Oop_Desc/)
+19. [快速编译OpenJDK的Dockers镜像](https://hub.docker.com/r/bolingcavalry/openjdksrc11)
 
 ### C/C++ 相关的
 
