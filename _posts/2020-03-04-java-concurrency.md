@@ -528,11 +528,11 @@ monitorexit
 
 所以我们想要探索 synchronized 的实现机制，就需要探索 monitorenter 和monitorexit 指令的执行过程了～
 
-我们知道，在 HotSpot JVM 早期的时候，字节码的执行是通过解释性来执行每一条字节码指令的，但是这种方式效率低下。这里插个内容，你知道为啥这种方式效率低下呢？JVM 也是通过 C/C++ 来编写的，为啥效率就那么慢呢？其实所谓效率低下，在 CPU 层面其实就是一个本来很简单的功能却需要大量的 CPU 机器指令来完成，从而导致效率低下。但是，我们还要问，为啥一个简单的功能会产生很多的机器指令呢？原因是这样，Java 程序编译之后，会产生很多字节码指令，每一个字节码指令在 JVM 底层执行的时候又会变成一堆 C 代码，这一堆 C 代码在编译之后又会变成很多的机器指令，这样一来，我们的 java 代码最终到机器指令一层，所产生的机器指令将是指数级的，因此就导致了 Java 执行效率非常低下，话说这个帽子貌似现在还在～
+我们知道，在 HotSpot JVM 早期的时候，使用了字节码解释器(bytecodeInterpreter)，用C++实现了每条JVM指令（如monitorenter、invokevirtual等），但是这种方式效率低下。这里插个内容，你知道为啥这种方式效率低下呢？JVM 也是通过 C/C++ 来编写的，为啥效率就那么慢呢？其实所谓效率低下，在 CPU 层面其实就是一个本来很简单的功能却需要大量的 CPU 机器指令来完成，从而导致效率低下。但是，我们还要问，为啥一个简单的功能会产生很多的机器指令呢？原因是这样，Java 程序编译之后，会产生很多字节码指令，每一个字节码指令在 JVM 底层执行的时候又会变成一堆 C 代码的执行，这一堆 C 代码在编译之后又会变成很多的机器指令，这样一来，我们的 java 代码最终到机器指令一层，所产生的机器指令将是指数级的，因此就导致了 Java 执行效率非常低下，话说这个帽子貌似现在还在～
 
-如果我们仔细思考下，怎么优化这个问题呢？字节码是肯定不能动的，因为 JVM 的一处编写，到处运行的梦想就是靠它完成的。其实，我们会发现，问题的根本就在于 Java 和机器指令之间隔了一层 C/C++，而例如 GCC 之类的编译器又不能做到绝对的智能编译，所产生的机器码效率仍然不是非常高。因此，我们会想，能不能跳过 C/C++ 这个层次能，直接将 java 字节码和本地机器码进行一个对应呢？是的！可以的！HotSpot 工程师们早就想到了，因此早期的解释执行器很快就被废弃了，转而采用模版执行器。什么是模版执行器，顾名思义，模版就是将一个 java 字节码通过「人工手动」的方式编写为固定模式的机器指令，这部分不在需要 GCC 的帮助，这样就可以大大减少最终需要执行的机器指令，所以才能提高效率。 所谓模版，就是定义了字节码到机器码转化的统一方式，就像生活中的模板一样，执行字节码的时候套用模版就能得到对应的「人工」调优的机器码～说到这里，真是要感叹，JVM 的字节码执行调优过程真是「人工」智能的结果啊！
+如果我们仔细思考下，怎么优化这个问题呢？字节码是肯定不能动的，因为 JVM 的一处编写，到处运行的梦想就是靠它完成的。其实，我们会发现，问题的根本就在于 Java 和机器指令之间隔了一层 C/C++，而例如 GCC 之类的编译器又不能做到绝对的智能编译，所产生的机器码效率仍然不是非常高。因此，我们会想，能不能跳过 C/C++ 这个层次能，直接将 java 字节码和本地机器码进行一个对应呢？是的！可以的！HotSpot 工程师们早就想到了，因此早期的字节码解释器很快就被废弃了，转而采用模板解释器(templateInterpreter)。什么是模板解释器，顾名思义，模版就是将一个 java 字节码通过「人工手动」的方式编写为固定模式的机器指令，这部分不在需要 GCC 的帮助，这样就可以大大减少最终需要执行的机器指令，所以才能提高效率。 所谓模版，就是定义了字节码到机器码转化的统一方式，就像生活中的模板一样，执行字节码的时候套用模版就能得到对应的「人工」调优的机器码～说到这里，真是要感叹，JVM 的字节码执行调优过程真是「人工」智能的结果啊！
 
-上面我们向大家解释了，现代 HotSpot JVM 中采用模版执行器执行字节的原因以及基本的技术方案。现在我们就要从 OpenJDK 中的模版执行器中探索 monitorenter 和 monitorexit 指令执行的细节过程。
+上面我们向大家解释了，现代 HotSpot JVM 中采用模板解释器，而不是字节码解释器的原因以及基本的技术方案。现在我们就要从 OpenJDK 中的模版解释器中探索 monitorenter 和 monitorexit 指令执行的细节过程。
 
 在 OpenJDK 11 的源码中，所有 JVM 的解释器（包括最古老的原始解释器）都在：src/hotspot/share/interpreter 目录下，通过这个目录下的代码文件名称我们就很容易地找到模版解释器的代码位置：templateInterpreter.cpp。通过分析这里的实现，我们知道，其实字节码对应到机器码的模版是在 templateTable.cpp 中定义的，这个文件中的代码量不多，全是字节码对应到本地机器码的实现逻辑，这里我们只是放上 monitor 相关的内容：
 
@@ -561,91 +561,37 @@ void TemplateTable::monitorenter() {
 这里我们仍然只给出重点代码部分，代码比较长，前面有很多指令是初始化执行环境的，最后重点会跳转执行 lock_object 函数，同样这个函数也是有不同 CPU 平台实现的，我们还是看 X86 平台的：
 
 ```cpp
-// Lock object
-//
-// Args:
-//      rdx, c_rarg1: BasicObjectLock to be used for locking
-//
-// Kills:
-//      rax, rbx
 void InterpreterMacroAssembler::lock_object(Register lock_reg) {
-    if (UseHeavyMonitors) {
-        call_VM(noreg,
+  ......
+  // 如果使用重量级锁，直接进入InterpreterRuntime::monitorenter()执行
+  if (UseHeavyMonitors) {
+    call_VM(noreg,
             CAST_FROM_FN_PTR(address, InterpreterRuntime::monitorenter),
             lock_reg);
-    } else {
-        // 执行锁优化的逻辑部分，例如：锁粗化，锁消除等等
-        // 如果一切优化措施都执行了，还是需要进入 monitor，就执行如下，其实和上面那个 if 分支是一样的
-        // Call the runtime routine for slow case
-        call_VM(noreg,
-            CAST_FROM_FN_PTR(address, InterpreterRuntime::monitorenter),
-            lock_reg);
+  } else {
+    ......
+    if (UseBiasedLocking) {
+      biased_locking_enter(lock_reg, obj_reg, swap_reg, tmp_reg, false, done, &slow_case);
     }
+    ......
+    // Call the runtime routine for slow case
+    call_VM(noreg,
+            CAST_FROM_FN_PTR(address, InterpreterRuntime::monitorenter),
+            lock_reg);
+    ......
+    // 直接跳到这表明获取锁成功，接下来就会返回到entry_point例程进行字节码的执行了。
+  }
 }
 ```
 
-这里我们无论如何最终都是执行了 InterpreterRuntime::monitorenter 函数，这个函数不仅仅是模版执行器会调用，解释执行器也会执行这个，所以定义在 InterpreterRuntime 类下：
+上面的代码只保留了其逻辑结构。其实这里的逻辑很简单，就是根据`UseHeavyMonitors`以及`UseBiasedLocking`这两个bool变量决定执行的锁的逻辑，若`UseHeavyMonitors`为true，就执行`InterpreterRuntime::monitorenter`逻辑；否则，若`UseBiasedLocking`为true,就执行`biased_locking_enter`逻辑。
 
-```cpp
-// Synchronization
-//
-// The interpreter's synchronization code is factored out so that it can
-// be shared by method invocation and synchronized blocks.
-//%note synchronization_3
-//%note monitor_1
-IRT_ENTRY_NO_ASYNC(void, InterpreterRuntime::monitorenter(JavaThread* thread, BasicObjectLock* elem))
-  Handle h_obj(thread, elem->obj());
-  if (UseBiasedLocking) {
-    // Retry fast entry if bias is revoked to avoid unnecessary inflation
-    ObjectSynchronizer::fast_enter(h_obj, elem->lock(), true, CHECK);
-  } else {
-    ObjectSynchronizer::slow_enter(h_obj, elem->lock(), CHECK);
-  }
-IRT_END
-```
-
-上面的代码，在原始的代码基础上有删减，保留了核心关键逻辑。其实这里的逻辑很简单，就是根据 UseBiasedLocking 这个变量分别执行 fast_enter 或者 slow_enter 的逻辑。从 UseBiasedLocking 这个变量的名称就能看出来，这是 JVM 1.6 之后默认使能的偏置锁优化，可以通过 JVM 启动参数 ```-XX:+/-UseBiasedLocking``` 来控制开关。什么？你问我什么是偏置锁？ok，别慌，下面我们就要开讲了。
+其实从这个变量的名称就能看出来，UseHeavyMonitors指的是是否使用重量级锁而不进行偏向锁优化，可以通过JVM启动参数`-XX:+UseHeavyMonitors`来开启；而UseBiasedLocking指的是 JVM 1.6 之后默认使能的偏向锁优化，可以通过JVM启动参数 ```-XX:+/-UseBiasedLocking``` 来控制开关。什么？你问我什么是偏向锁？ok，别急，下面我们就要开讲了。
 
 ### 同步锁优化处理
 
-因为我们是在 JDK 11 上分析，因此上面的代码，肯定是执行 fast_enter 啦～至于这个函数为啥叫 fast，后面分析完你就知道了～
-
-下面是 fast_enter 函数的定义：
-
-```cpp
-//  Fast Monitor Enter/Exit
-// This the fast monitor enter. The interpreter and compiler use
-// some assembly copies of this code. Make sure update those code
-// if the following function is changed. The implementation is
-// extremely sensitive to race condition. Be careful.
-void ObjectSynchronizer::fast_enter(Handle obj, BasicLock* lock,
-                                    bool attempt_rebias, TRAPS) {
-  //虚拟机参数判断是否开启了偏向锁
-  if (UseBiasedLocking) {
-    //如果不处于全局安全点
-    if (!SafepointSynchronize::is_at_safepoint()) {
-      //通过`revoke_and_rebias`这个函数尝试获取偏向锁
-      BiasedLocking::Condition cond = BiasedLocking::revoke_and_rebias(obj, attempt_rebias, THREAD);
-      if (cond == BiasedLocking::BIAS_REVOKED_AND_REBIASED) {
-        return;
-      }
-    } else {//如果在安全点，撤销偏向锁
-      assert(!attempt_rebias, "can not rebias toward VM thread");
-      BiasedLocking::revoke_at_safepoint(obj);
-    }
-    assert(!obj->mark()->has_bias_pattern(), "biases should be revoked by now");
-  }
-  slow_enter(obj, lock, THREAD);
-}
-```
-
-这里开始还是要判断 UseBiasedLocking，如果是 true 的话，就真的开始执行优化逻辑，否则还是会 fall back 到 slow_enter 的。是不是感觉判断 UseBiasedLocking 有点啰嗦？其实不是的，因为这个函数在很多地方都会调用的，因此判断是必要的！为了方便接下来的代码分析，下面我要放出 [OpenJDK 官方 wiki](https://wiki.openjdk.java.net/display/HotSpot/Synchronization) 中针对锁优化的原理图：
-![原版](/assets/posts/header_word_layout_and_object_states.gif)
-
----
-
-![中文版](/assets/posts/header_word_layout_and_object_states_cn.jfif)
-
+为了方便接下来的代码分析，下面我要放出 [OpenJDK 官方 wiki](https://wiki.openjdk.java.net/display/HotSpot/Synchronization) 中针对锁优化的原理图：
+![锁优化的原理图](/assets/posts/header_word_layout_and_object_states.gif)
 这张图咋一看，很复杂，你可能看不懂。但是，相信我，如果你仔细看完下面的代码分析并且自己结合 JVM 源码尝试理解，你肯定会完全吃透这张图。
 
 预警：接下来的内容会比较烧脑，内容比较复杂，建议你休息一下再来看～
@@ -743,7 +689,7 @@ Space losses: 0 bytes internal + 3 bytes external = 3 bytes total
 //                                               not valid at any other time
 ```
 
-在所有状态的前两个状态是我们需要重点关注的：normal object 和 biased object。仔细看这两部分的头定义，最后三个 bit 用来区分偏置锁和普通锁的部分，这里就和前面 OpenJDK wiki 中的图对上了，总结如下：
+在所有状态的前两个状态是我们需要重点关注的：normal object 和 biased object。仔细看这两部分的头定义，最后三个 bit 用来区分偏向锁和普通锁的部分，这里就和前面 OpenJDK wiki 中的图对上了，总结如下：
 
 biased_lock | lock | 状态
 ------------|------|-----
@@ -755,9 +701,9 @@ biased_lock | lock | 状态
 
 具体的内容参考 [OpenJDK wiki](https://wiki.openjdk.java.net/display/HotSpot/Synchronization) 中的图，为了方便描述，这里再贴一次：
 
-![原版](/assets/posts/header_word_layout_and_object_states.gif)
+![锁优化的原理图](/assets/posts/header_word_layout_and_object_states.gif)
 
-下面我们针对上面的那张图解释一下，首先解释一下什么是偏置锁。所谓偏置，就是偏向某一个线程的意思，也就是说这个锁首先假设自己被偏向的线程持有。在单个线程连续持有锁的时候，偏向锁就起作用了。如果一个线程连续不停滴获取锁，那么获取的过程中如果没有发生竞态，那么可以跳过繁重的同步过程，直接就获得锁执行，这样可以大大提高性能。偏向锁是 JDK 1.6 中引入的一项锁优化手段，它的目的就是消除数据在无争用的情况下的同步操作，进一步提高运行性能。这里还涉及到了轻量级锁，轻量级锁也是 JDK 1.6 引入的一个锁优化机制，所谓轻量级是相对于使用操作系统互斥机制来实现传统锁而言的，在这个角度上，传统的方式就是重量级锁，所谓重量级的原因是同步的方式是一种悲观锁，会导致线程的状态切换，而线程状态的切换是一个相当重量级的操作。在 JVM 6 以上版本中，默认使能偏置优化技术，因此上面的图中，只要分配了新的对象，都会指定左图中的逻辑。首先一个新的对象处于未锁定、未偏置但是可以偏置的状态，也就是上面表格的第一行，这个时候如果有个线程来获取这个对象锁，那么就直接进入已偏置状态，在64位的JVM中，这个状态和未偏置状态的差别就是原来开头的 25 bit 的 unused 与 31bit 的 hash code 变成了 54 bit 的 thread 指针和 2 bit 的分代信息，那么原始的信息去哪里了呢？其实就存储到获取到锁的线程栈中了，后面我们会在代码中看到这一点。经过这一步的操作，我们就在对象头部存储上了线程指针信息，标记这个对象的锁已经被这个线程持有了，相当于表明：此花已有主。下次当这个线程在此获取这个锁的时候，只要状态没有发生变化，所需要的开销就是一次指针的比较运算，而这个运算是非常轻量的。但是在某个线程持有这个对象锁的时候，如果有另外一个线程来竞争了，锁的偏置状态结束，会触发撤销偏置的逻辑，这个时候可以分为如下两个情况（持有锁的线程称为 线程 A，竞争的称为 线程 B）：
+下面我们针对上面的那张图解释一下，首先解释一下什么是偏向锁。所谓偏置，就是偏向某一个线程的意思，也就是说这个锁首先假设自己被偏向的线程持有。在单个线程连续持有锁的时候，偏向锁就起作用了。如果一个线程连续不停滴获取锁，那么获取的过程中如果没有发生竞态，那么可以跳过繁重的同步过程，直接就获得锁执行，这样可以大大提高性能。偏向锁是 JDK 1.6 中引入的一项锁优化手段，它的目的就是消除数据在无争用的情况下的同步操作，进一步提高运行性能。这里还涉及到了轻量级锁，轻量级锁也是 JDK 1.6 引入的一个锁优化机制，所谓轻量级是相对于使用操作系统互斥机制来实现传统锁而言的，在这个角度上，传统的方式就是重量级锁，所谓重量级的原因是同步的方式是一种悲观锁，会导致线程的状态切换，而线程状态的切换是一个相当重量级的操作。在 JVM 6 以上版本中，默认使能偏置优化技术，因此上面的图中，只要分配了新的对象，都会指定左图中的逻辑。首先一个新的对象处于未锁定、未偏置但是可以偏置的状态，也就是上面表格的第一行，这个时候如果有个线程来获取这个对象锁，那么就直接进入已偏置状态，在64位的JVM中，这个状态和未偏置状态的差别就是原来开头的 25 bit 的 unused 与 31bit 的 hash code 变成了 54 bit 的 thread 指针和 2 bit 的分代信息，看起来hashCode与偏向锁冲突了？其实，如果一个对象请求计算identity hashcode，那么将导致它不能被偏向锁锁定，后面我们会在代码中看到这一点。经过这一步的操作，我们就在对象头部存储上了线程指针信息，标记这个对象的锁已经被这个线程持有了，相当于表明：此花已有主。下次当这个线程在此获取这个锁的时候，只要状态没有发生变化，所需要的开销就是一次指针的比较运算，而这个运算是非常轻量的。但是在某个线程持有这个对象锁的时候，如果有另外一个线程来竞争了，锁的偏置状态结束，会触发撤销偏置的逻辑，这个时候可以分为如下两个情况（持有锁的线程称为 线程 A，竞争的称为 线程 B）：
 
 1. 线程 B 到达的时候，线程 A 已经放开对象锁，此时对象锁处于的状态是：偏置对象、未锁定
 2. 线程 B 到达的时候，线程 A 正持有这个锁，此时对象处于的状态是：偏置对象，已锁定
@@ -776,9 +722,309 @@ biased_lock | lock | 状态
 
 另外，需要说明的是，在一个线程轻量级锁定某个对象的时候，另外一个线程过来竞争也会导致锁的膨胀，进入到重量级的锁。总结起来的话，就是没有竞争就是偏向锁，少量竞争就是轻量级锁，大量竞争就是重量级锁。
 
-需要说明的是，偏置锁和轻量级锁的关系并不是互相取代或者竞争关系，而是属于在不同情况下的不同的锁优化手段。这里就需要提到在概念上的锁分类，通常可以分为：悲观锁和乐观锁。所谓悲观锁，就是认为如果我不做充分的同步的手段（包括执行重量级的操作）就肯定会出现问题；所谓乐观锁，就是会乐观地预估系统当前的状态，认为状态是符合预期的，因此不用重量级的同步也可以完成同步，如果不巧发生了竞态，就退避，然后再按照一定的策略重试。在 java 中，很多传统的同步方式（包括 synchronized，重入锁）都是悲观锁，在 java 9 中在 Thread 类中新加入了一个接口 onSpinWait 就是一种乐观锁，另外在 JUC 中很多的原子工具类都使用到了 CAS（Compare And Swap）操作，这种操作本质上是利用 CPU 提供的特定原子操作指令，基于冲突检测的方式来实现的一种乐观锁定的同步技术。
+需要说明的是，偏向锁和轻量级锁的关系并不是互相取代或者竞争关系，而是属于在不同情况下的不同的锁优化手段。这里就需要提到在概念上的锁分类，通常可以分为：悲观锁和乐观锁。所谓悲观锁，就是认为如果我不做充分的同步的手段（包括执行重量级的操作）就肯定会出现问题；所谓乐观锁，就是会乐观地预估系统当前的状态，认为状态是符合预期的，因此不用重量级的同步也可以完成同步，如果不巧发生了竞态，就退避，然后再按照一定的策略重试。在 java 中，很多传统的同步方式（包括 synchronized，重入锁）都是悲观锁，在 java 9 中在 Thread 类中新加入了一个接口 onSpinWait 就是一种乐观锁，另外在 JUC 中很多的原子工具类都使用到了 CAS（Compare And Swap）操作，这种操作本质上是利用 CPU 提供的特定原子操作指令，基于冲突检测的方式来实现的一种乐观锁定的同步技术。
 
-上面我们详细介绍了 JVM 中的各种锁优化的技术细节，现在我们看下在 JVM 的代码实现上是如何操作的。在看到 fast_enter 函数的时候，看到了代码中有判断 safepoint 的地方，这里大家先不用关心，这个是和 JVM 的 GC 有关的内容，不是我们这里关心的内容。一般而言，都会执行到 _revoke_and_rebias_ 这个函数中，这个函数比较长，主要是在执行 OpenJDK wiki 中图的 revoke 和 rebias 操作。
+上面我们详细介绍了 JVM 中的各种锁优化的技术细节，现在我们看下在 JVM 的代码实现上是如何操作的。我们回到之前对代码的分析。
+
+```cpp
+void InterpreterMacroAssembler::lock_object(Register lock_reg) {
+  ......
+  // 如果使用重量级锁，直接进入InterpreterRuntime::monitorenter()执行
+  if (UseHeavyMonitors) {
+    call_VM(noreg,
+            CAST_FROM_FN_PTR(address, InterpreterRuntime::monitorenter),
+            lock_reg);
+  } else {
+    Label done;
+    // cmpxchg其实就是CAS操作，必须使用rax寄存器作为老数据的存储。
+    const Register swap_reg = rax; // Must use rax for cmpxchg instruction
+    const Register tmp_reg = rbx; // Will be passed to biased_locking_enter to avoid a problematic case where tmp_reg = no_reg.
+    const Register obj_reg = LP64_ONLY(c_rarg3) NOT_LP64(rcx); // Will contain the oop
+
+    ......
+    Label slow_case;
+
+    // Load object pointer into obj_reg
+    movptr(obj_reg, Address(lock_reg, obj_offset));
+    //如果虚拟机参数允许使用偏向锁，那么进入biased_locking_enter()中
+    if (UseBiasedLocking) {
+      // lock_reg :存储的是分配的BasicObjectLock的指针
+      // obj_reg :存储的是锁对象的指针
+      // slow_case :即InterpreterRuntime::monitorenter()；
+      // done :标志着获取锁成功。
+
+      // slow_case 和 done 也被传入，这样在biased_locking_enter()中，就可以根据情况跳到这两处了。
+      biased_locking_enter(lock_reg, obj_reg, swap_reg, tmp_reg, false, done, &slow_case);
+    }
+    ......
+    ......
+
+    // 如果使用重量级锁，直接跳到这，需要进入InterpreterRuntime::monitorenter()中去获取锁。
+    bind(slow_case);
+    // Call the runtime routine for slow case
+    call_VM(noreg,
+            CAST_FROM_FN_PTR(address, InterpreterRuntime::monitorenter),
+            lock_reg);
+    // 直接跳到这表明获取锁成功，接下来就会返回到entry_point例程进行字节码的执行了。
+    bind(done);
+  }
+}
+```
+
+上面的代码，在原始的代码基础上有删减，保留了核心关键逻辑。前文提到了，这里根据`UseHeavyMonitors`以及`UseBiasedLocking`这两个bool变量决定执行的锁的逻辑，若`UseHeavyMonitors`为true，就执行`InterpreterRuntime::monitorenter()`逻辑；否则，若`UseBiasedLocking`为true,就执行`biased_locking_enter()`逻辑。由于JDK1.6后默认开启偏向锁优化，因此线程会执行`biased_locking_enter()`获取偏向锁。我们先了解一下函数中出现的bind(slow_case)和bind(done)，有何作用？看看它的声明：
+
+```cpp
+  // Label functions
+  void bind(Label& L); // binds an unbound label L to the current code position
+```
+
+其实是用来将当前代码的位置绑定到一个Label中的，这样程序就能通过这个label跳转到这段代码执行（相当于汇编中的LABEL伪指令）。在调用`biased_locking_enter`时，slow_case 和 done 标签也被传入，这样在`biased_locking_enter`中，就可以根据情况回跳到这两处了：比如说获取偏向锁失败，需要跳回时，slow_case进行锁升级；或者成功获取偏向锁，返回done处，继续执行方法的字节码。
+
+`biased_locking_enter(...)`用于获取偏向锁，代码比较长，下面将一步步分析。
+
+#### 1. 判断锁对象是否为偏向锁状态
+
+```cpp
+// mark_addr:锁对象头中的markOop指针。
+Address mark_addr      (obj_reg, oopDesc::mark_offset_in_bytes());
+NOT_LP64( Address saved_mark_addr(lock_reg, 0); )
+
+if (PrintBiasedLockingStatistics && counters == NULL) {
+  counters = BiasedLocking::counters();
+}
+
+Label cas_label;
+int null_check_offset = -1;
+// 如果swap_reg中没存mark_addr，那么就先将mark_addr存入swap_reg中。
+if (!swap_reg_contains_mark) {
+  null_check_offset = offset();
+  movptr(swap_reg, mark_addr);
+}
+// 将对象的mark_addr，即markOop指针移入tmp_reg中
+movptr(tmp_reg, swap_reg);
+// 将tmp_reg和biased_lock_mask_in_place进行与操作，biased_lock_mask_in_place为111，和它进行与就可以取出markOop中后三位，即（是否偏向锁+锁标志位）
+andptr(tmp_reg, markOopDesc::biased_lock_mask_in_place);
+// 将上面结果，即（是否偏向锁+锁标志位）和biased_lock_pattern再次比较（biased_lock_pattern为5，即101），如果不相等，则表明不为偏向锁状态，需要进行CAS操作，跳往cas_label；否则即为偏向锁状态，接着往下走。
+cmpptr(tmp_reg, markOopDesc::biased_lock_pattern);
+jcc(Assembler::notEqual, cas_label);
+```
+
+对于上文的A、B线程例子的的情况一：线程A将继续执行下面步骤获取偏向锁；由于假设B在A释放锁后进入同步代码块，此时被锁对象处于可偏向状态（见后文，其实偏向锁的释放就是什么也不做），故B也继续执行下面步骤。
+
+#### 2. 判断锁对象之前是否已经偏向当前线程
+
+走到这，表明锁对象已经为偏向锁态，需要判断锁对象之前是否已经偏向当前线程。
+
+```cpp
+// 将锁对象所属类的prototype_header移动至tmp_reg中，prototype_header中存储的也是markOop。
+// prototype_header是专门为偏向锁打造的，初始时类的prototype_header为偏向锁态，即后三位为101，一旦发生了bulk_revoke,那么就会设为无锁态，即001。
+// bulk_revoke为批量撤销，每次类发生bulk_rebais时（类的所有对象重设偏向锁），类prototype_header中的epoch就会+1，当epoch达到一个阈值时，就会发生bulk_revoke，撤销该类每个对象的偏向锁，这样该类的所有对象以后都不能使用偏向锁了，其实也就是虚拟机认为该对象不适合偏向锁。
+load_prototype_header(tmp_reg, obj_reg);
+
+// 将当前线程id和类的prototype_header相或，这样得到的markOop为（当前线程id + prototype_header中的（epoch + 分代年龄 + 偏向锁标志 + 锁标志位）），注意prototype_header的分代年龄那4个字节为0
+orptr(tmp_reg, r15_thread);
+// 将上面计算得到的结果与锁对象的markOop进行异或，tmp_reg中相等的位全部被置为0，只剩下不相等的位。
+xorptr(tmp_reg, swap_reg);
+Register header_reg = tmp_reg;
+// 对((int) markOopDesc::age_mask_in_place)进行按位取反，age_mask_in_place为...0001111000,取反后，变成了...1110000111,除了分代年龄那4位，其他位全为1；
+// 将取反后的结果再与header_reg相与，这样就把header_reg中除了分代年龄之外的其他位取了出来，即将上面异或得到的结果中分代年龄给忽略掉。
+andptr(header_reg, ~((int) markOopDesc::age_mask_in_place));
+// 如果除了分代年龄，对象的markOop和（当前线程id+其他位）相等，那么上面与操作的结果应该为0，表明对象之前已经偏向当前线程，即markOop中存放有当前线程id，那么跳到done处，直接进入方法执行即可；否则表明当前线程还不是偏向锁的持有者，会接着往下走。
+jcc(Assembler::equal, done);
+```
+
+对于A、B线程例子的的情况一，A线程进入时由于还未偏向，接着执行；线程B进入时，由于对象并不是偏向当前B线程自己（见后文，其实偏向锁的释放就是什么也不做，故markOop的线程ID还是A），因此也是继续执行。
+
+#### 3. 判断是否需要撤销锁对象的偏向
+
+走到这，表明锁对象并没有偏向当前线程，接下来判断是否需要撤销锁对象的偏向。
+
+```cpp
+// (将header_reg和111相与，如果结果不为0，则表明header_reg后三位存在不为0的位，证明之前进行异或时，类的prototype_header后面三位与对象markOop的后三位不相等，但是)? 能走到这，表明对象markword后三位为101，即偏向模式。现在类的prototype_header和对象markOop后三位不相等，即对象所属类不再支持偏向，发生了bulk_revoke，所以需要对当前对象进行偏向锁的撤销；否则表明目前该类还支持偏向锁，接着往下走。
+testptr(header_reg, markOopDesc::biased_lock_mask_in_place);
+jccb(Assembler::notZero, try_revoke_bias);
+```
+
+对于A、B线程例子的的情况一，这里假设锁的对象所属于的类依旧支持偏向锁，因此线程A与B都无需撤销重偏向，继续执行。
+
+#### 4. 断当前对象的epoch是否合法
+
+走到这，表明锁对象还支持偏向锁，需要判断当前对象的epoch是否合法，如果不合法，需要取进行重偏向。合法的话接着往下走。
+
+```cpp
+// 测试对象所属类的prototype_header中epoch是否为0，不为0的话则表明之前异或时，类的prototype_header中epoch和对象markOop的epoch不相等，表明类在对象分配后发生过bulk_rebais()（前面提到过，每次发生bulk_rebaise,类的prototype header中的epoch都会+1），所以之前对象的偏向就无效了，需要进行重偏向。否则接着往下走。
+testptr(header_reg, markOopDesc::epoch_mask_in_place);
+jccb(Assembler::notZero, try_rebias);
+```
+
+对于A、B线程例子的的情况一，仍然假设没有发生bulk_rebais()，故线程A和B都继续执行。
+
+#### 5. 尝试获取偏向锁
+
+走到这，表明锁对象的偏向态合法，可以尝试去获取锁，使对象偏向当前线程。
+
+```cpp
+// swap_reg存放着mark_addr
+// 故此处是取出对象markOop中除线程id之外的其他位
+andptr(swap_reg,
+        markOopDesc::biased_lock_mask_in_place | markOopDesc::age_mask_in_place | markOopDesc::epoch_mask_in_place);
+// 将其他位移动至 tmp_reg。
+movptr(tmp_reg, swap_reg);
+// 将其他位和当前线程id进行或，构造成一个新的完整的一个字(32bit/64bit)的markOop,存入tmp_reg中。新的markOop因为保存了当前线程id，所以会偏向当前线程。
+orptr(tmp_reg, r15_thread);
+// 尝试利用CAS操作将新构成的markOop存入对象头的mark_addr处，如果设置成功，则获取偏向锁成功。
+// 这里说明下，cmpxchgptr操作会强制将rax寄存器（swap_reg）中内容作为老数据，与第二个参数，在这里即mark_addr处的内容进行比较，如果相等，则将第一个参数的内容，即tmp_reg中的新数据，存入mark_addr。
+cmpxchgptr(tmp_reg, mark_addr); // compare tmp_reg and swap_reg
+// 上面CAS操作失败的情况下，表明对象头中的markOop数据已经被篡改，即有其他线程已经获取到偏向锁，因为偏向锁不容许多个线程访问同一个锁对象，所以需要跳到slow_case处，去撤销该对象的偏向锁，并进行锁升级。
+if (slow_case != NULL) {
+  jcc(Assembler::notZero, *slow_case);
+}
+// 上面CAS成功的情况下，直接就跳往done处，回去执行方法的字节码了。
+jmp(done);
+```
+
+对于A、B线程例子的的情况一：对于线程A，此处的cmpxchgptr成功(新构建的markOop与原markOop相同)，成功获得偏向锁；而对于后来的线程B，cmpxchgptr失败（见后文，其实偏向锁的释放就是什么也不做，故原markOop的线程ID还是A，因而新构建的markOop与原markOop不同），跳转到slow_case，也就是执行`InterpreterRuntime::monitorenter`，进行撤销偏向锁。
+
+#### 6. try_rebais和try_revoke
+
+其实到这里，biased_locking_enter()已经结束了，不过上面多处提到了try_rebais和try_revoke，两个Label，它们对应的代码也定义在biased_locking_enter中。
+
+```cpp
+bind(try_rebias);
+// 将锁对象所属类的prototype_header送入tmp_reg。
+load_prototype_header(tmp_reg, obj_reg);
+// 尝试用CAS操作，使对象的markOop重置为无线程id的偏向锁态，即不偏向任何线程。
+cmpxchgptr(tmp_reg, mark_addr);
+// 和第5步一样，如果CAS失败，则表明对象头的markOop数据已经被其他线程更改，需要跳往slow_case进行撤销偏向锁，否则跳往done处，执行字节码。
+if (slow_case != NULL) {
+  jcc(Assembler::notZero, *slow_case);
+}
+jmp(done);
+```
+
+```cpp
+bind(try_revoke_bias);
+// 走到这，表明这个类的prototype_header中已经没有偏向锁的位了，即这个类的所有对象都不再支持偏向锁了，但是当前对象仍为偏向锁状态，所以我们需要重置下当前对象的markOop为无锁态。
+// 将锁对象所属类的prototype_header送入tmp_reg。
+load_prototype_header(tmp_reg, obj_reg);
+// 尝试用CAS操作，使对象的markOop重置为无锁态。这里是否失败无所谓，即使失败了，也表明其他线程已经移除了对象的偏向锁标志。
+cmpxchgptr(tmp_reg, mark_addr);
+//接下来会回到lock_object()方法中，继续轻量级锁的获取。
+```
+
+### 退出偏向锁
+
+与monitorenter一样，我们看下monitorexit的实现：
+
+```cpp
+void TemplateTable::monitorexit() {
+  ...
+  __ unlock_object(c_rarg1);
+  ...
+}
+```
+
+```cpp
+void InterpreterMacroAssembler::unlock_object(Register lock_reg) {
+  assert(lock_reg == c_rarg1, "The argument is only for looks. It must be rarg1");
+
+  if (UseHeavyMonitors) {
+    call_VM(noreg,
+            CAST_FROM_FN_PTR(address, InterpreterRuntime::monitorexit),
+            lock_reg);
+  } else {
+    ...
+    if (UseBiasedLocking) {
+      biased_locking_exit(obj_reg, header_reg, done);
+    }
+    ...
+    // Call the runtime routine for slow case.
+    movptr(Address(lock_reg, BasicObjectLock::obj_offset_in_bytes()),
+         obj_reg); // restore obj
+    call_VM(noreg,
+            CAST_FROM_FN_PTR(address, InterpreterRuntime::monitorexit),
+            lock_reg);
+
+    bind(done);
+
+    restore_bcp();
+  }
+}
+```
+
+```cpp
+void MacroAssembler::biased_locking_exit(Register obj_reg, Register temp_reg, Label& done) {
+  assert(UseBiasedLocking, "why call this otherwise?");
+
+  // Check for biased locking unlock case, which is a no-op
+  // Note: we do not have to check the thread ID for two reasons.
+  // First, the interpreter checks for IllegalMonitorStateException at
+  // a higher level. Second, if the bias was revoked while we held the
+  // lock, the object could not be rebiased toward another thread, so
+  // the bias bit would be clear.
+  movptr(temp_reg, Address(obj_reg, oopDesc::mark_offset_in_bytes()));
+  andptr(temp_reg, markOopDesc::biased_lock_mask_in_place);
+  cmpptr(temp_reg, markOopDesc::biased_lock_pattern);
+  jcc(Assembler::equal, done);
+}
+```
+
+如注释所言，这是一个“无操作”的过程(no-op)，仅仅检查了对象头是否还是可偏向状态，然后跳转到done标签。
+
+### 升级为轻量级锁
+
+我们知道，当获取偏向锁失败，线程就会转跳到slow_case处执行 InterpreterRuntime::monitorenter 函数，这个函数不仅仅是模版解释器会调用，解释执行器也会执行这个，所以定义在 InterpreterRuntime 类下：
+
+```cpp
+// Synchronization
+//
+// The interpreter's synchronization code is factored out so that it can
+// be shared by method invocation and synchronized blocks.
+//%note synchronization_3
+//%note monitor_1
+IRT_ENTRY_NO_ASYNC(void, InterpreterRuntime::monitorenter(JavaThread* thread, BasicObjectLock* elem))
+  Handle h_obj(thread, elem->obj());
+  if (UseBiasedLocking) {
+    // Retry fast entry if bias is revoked to avoid unnecessary inflation
+    ObjectSynchronizer::fast_enter(h_obj, elem->lock(), true, CHECK);
+  } else {
+    ObjectSynchronizer::slow_enter(h_obj, elem->lock(), CHECK);
+  }
+IRT_END
+```
+
+因为我们是在 JDK 11 上分析，因此上面的代码，肯定是执行 fast_enter 啦～下面是 fast_enter 函数的定义：
+
+```cpp
+//  Fast Monitor Enter/Exit
+// This the fast monitor enter. The interpreter and compiler use
+// some assembly copies of this code. Make sure update those code
+// if the following function is changed. The implementation is
+// extremely sensitive to race condition. Be careful.
+void ObjectSynchronizer::fast_enter(Handle obj, BasicLock* lock,
+                                    bool attempt_rebias, TRAPS) {
+  //虚拟机参数判断是否开启了偏向锁
+  if (UseBiasedLocking) {
+    //如果不处于全局安全点，即正常的Java线程
+    if (!SafepointSynchronize::is_at_safepoint()) {
+      //通过`revoke_and_rebias`这个函数尝试获取偏向锁
+      BiasedLocking::Condition cond = BiasedLocking::revoke_and_rebias(obj, attempt_rebias, THREAD);
+      if (cond == BiasedLocking::BIAS_REVOKED_AND_REBIASED) {
+        return;
+      }
+    } else {//如果在安全点，即VM线程，撤销偏向锁
+      assert(!attempt_rebias, "can not rebias toward VM thread");
+      BiasedLocking::revoke_at_safepoint(obj);
+    }
+    assert(!obj->mark()->has_bias_pattern(), "biases should be revoked by now");
+  }
+  slow_enter(obj, lock, THREAD);
+}
+```
+
+这里开始还是要判断 UseBiasedLocking，如果是 true 的话，就开始执行优化逻辑，否则会 fall back 到 slow_enter 的。是不是感觉判断 UseBiasedLocking 有点啰嗦？其实不是的，因为这个函数在很多地方都会调用的，因此判断是必要的！
+
+在 fast_enter 函数中，有判断 safepoint 的地方，这里大家先不用关心，这个是和 JVM 的 GC 有关的内容，不是我们这里关心的内容。对于正常的Java线程执行，会执行到 _revoke_and_rebias_ 这个函数中，这个函数比较长，主要是在执行 OpenJDK wiki 中图的 revoke 和 rebias 操作。
 
 ```cpp
 BiasedLocking::Condition BiasedLocking::revoke_and_rebias(Handle obj, bool attempt_rebias, TRAPS) {
@@ -815,12 +1061,13 @@ BiasedLocking::Condition BiasedLocking::revoke_and_rebias(Handle obj, bool attem
       markOop res_mark = (markOop) Atomic::cmpxchg_ptr(prototype_header, obj->mark_addr(), mark);
       assert(!(*(obj->mark_addr()))->has_bias_pattern(), "even if we raced, should still be revoked");
       return BIAS_REVOKED;
-    } else if (prototype_header->bias_epoch() != mark->bias_epoch()) {//如果偏向锁过期，则进入当前分支
+    } else if (prototype_header->bias_epoch() != mark->bias_epoch()) {//如果偏向锁epoch过期，则进入当前分支
       //如果允许尝试获取偏向锁
       if (attempt_rebias) {
-        //fast_enter进入此分支！！！
+        //本例中，fast_enter进入此分支！！！
         assert(THREAD->is_Java_thread(), "");
         markOop biased_value       = mark;
+        //构建心的偏向本线程的markOop
         markOop rebiased_prototype = markOopDesc::encode((JavaThread*) THREAD, mark->age(), prototype_header->bias_epoch());
         //通过CAS 操作， 将本线程的 ThreadID 、时间错、分代年龄尝试写入对象头中
         markOop res_mark = (markOop) Atomic::cmpxchg_ptr(rebiased_prototype, obj->mark_addr(), mark);
@@ -840,13 +1087,48 @@ BiasedLocking::Condition BiasedLocking::revoke_and_rebias(Handle obj, bool attem
       }
     }
   }
-  ...
+
+  //批量重偏向与批量撤销的逻辑
+  HeuristicsResult heuristics = update_heuristics(obj(), attempt_rebias);
+  if (heuristics == HR_NOT_BIASED) {
+    return NOT_BIASED;
+  } else if (heuristics == HR_SINGLE_REVOKE) {//撤销单个线程
+    Klass *k = obj->klass();
+    markOop prototype_header = k->prototype_header();
+    if (mark->biased_locker() == THREAD &&
+        prototype_header->bias_epoch() == mark->bias_epoch()) {// 走到这里说明需要撤销的是偏向当前线程的锁，当调用Object#hashcode方法时会走到这一步
+      // 因为只要遍历当前线程的栈就好了，所以不需要等到safepoint再撤销。
+      ResourceMark rm;
+      if (TraceBiasedLocking) {
+        tty->print_cr("Revoking bias by walking my own stack:");
+      }
+      BiasedLocking::Condition cond = revoke_bias(obj(), false, false, (JavaThread*) THREAD);
+      ((JavaThread*) THREAD)->set_cached_monitor_info(NULL);
+      assert(cond == BIAS_REVOKED, "why not?");
+      return cond;
+    } else {// 下面代码最终会在VM线程中的safepoint调用revoke_bias方法
+      VM_RevokeBias revoke(&obj, (JavaThread*) THREAD);
+      VMThread::execute(&revoke);
+      return revoke.status_code();
+    }
+  }
+
+  assert((heuristics == HR_BULK_REVOKE) ||
+         (heuristics == HR_BULK_REBIAS), "?");
+  //批量撤销、批量重偏向的逻辑
+  VM_BulkRevokeBias bulk_revoke(&obj, (JavaThread*) THREAD,
+                                (heuristics == HR_BULK_REBIAS),
+                                attempt_rebias);
+  VMThread::execute(&bulk_revoke);
+  return bulk_revoke.status_code();
 }
 ```
 
+(是不是发现这个函数的偏向锁实现与前面的`biased_locking_enter(...)`重复了？其实这是因为这个函数不仅仅是模版解释器会调用，字节码解释器也会执行这个函数。)?
+
 `fast_enter`函数中调用了上述函数，最终进入```if (attempt_rebias)```分支，尝试获取偏向锁，通过CAS 操作， 将本线程的 ThreadID 、时间错、分代年龄尝试写入对象头中。若成功了则返回BIAS_REVOKED_AND_REBIASED，使`fast_enter` 返回，否则fast_enter将会 fall back 到 slow_enter。
 
-> 顺便提一下，如果如果我们没有重写默认的hashCode方法，默认的hashCode要通过`ObjectSynchronizer::FastHashCode`函数计算identity hashcode。
+> 前文提到，若对象计算并保存了hashCode到对象的Mark Word中，会导致该对象无法被偏向锁锁定，[Oracle这篇文章](https://blogs.oracle.com/dave/biased-locking-in-hotspot)就有说到。而且，如果该对象已经偏向，如果如果我们没有重写默认的hashCode方法，默认的hashCode要通过`ObjectSynchronizer::FastHashCode`函数计算identity hashcode，这将导致偏向锁的撤销。
 >
 > ```cpp
 > intptr_t ObjectSynchronizer::FastHashCode (Thread * Self, oop obj) {
@@ -858,7 +1140,7 @@ BiasedLocking::Condition BiasedLocking::revoke_and_rebias(Handle obj, bool attem
 >     ...
 > ```
 >
-> 通过`FastHashCode`实现我们发现，调用`revoke_and_rebias`时会进入```if (mark->is_biased_anonymously() && !attempt_rebias)```分支，从而撤销偏向锁，导致锁的膨胀。读者可以[自行编写代码验证](https://blog.csdn.net/P19777/article/details/103125545)。
+> 通过`FastHashCode`实现我们发现，调用`revoke_and_rebias`时会进入```if (mark->is_biased_anonymously() && !attempt_rebias)```分支，从而撤销偏向锁。读者可以自行[编写代码验证](https://blog.csdn.net/P19777/article/details/103125545)。
 
 ### inflate 成为重锁
 
@@ -872,9 +1154,10 @@ BiasedLocking::Condition BiasedLocking::revoke_and_rebias(Handle obj, bool attem
 void ObjectSynchronizer::slow_enter(Handle obj, BasicLock* lock, TRAPS) {
   markOop mark = obj->mark();
   assert(!mark->has_bias_pattern(), "should not see bias pattern here");
-  if (mark->is_neutral()) {
+  if (mark->is_neutral()) {//如果当前是无锁状态, markword的biase_lock:0，lock:01
     // Anticipate successful CAS -- the ST of the displaced mark must
     // be visible <= the ST performed by the CAS.
+    //直接把mark保存到BasicLock对象的_displaced_header字段
     lock->set_displaced_header(mark);
     if (mark == obj()->cas_set_mark((markOop) lock, mark)) {
       TEVENT(slow_enter: release stacklock);
@@ -882,7 +1165,7 @@ void ObjectSynchronizer::slow_enter(Handle obj, BasicLock* lock, TRAPS) {
     }
     // Fall through to inflate() ...
   } else if (mark->has_locker() &&
-             THREAD->is_lock_owned((address)mark->locker())) {
+             THREAD->is_lock_owned((address)mark->locker())) {//如果markword处于加锁状态、且markword中的ptr指针指向当前线程的栈帧，表示为重入操作，不需要争抢锁
     assert(lock != mark->locker(), "must not re-lock the same lock");
     assert(lock != (BasicLock*)obj->mark(), "don't relock with same BasicLock");
     lock->set_displaced_header(NULL);
