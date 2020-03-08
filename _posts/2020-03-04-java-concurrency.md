@@ -973,7 +973,7 @@ void MacroAssembler::biased_locking_exit(Register obj_reg, Register temp_reg, La
 
 ### 升级为轻量级锁
 
-我们知道，当获取偏向锁失败，线程就会转跳到slow_case处执行 InterpreterRuntime::monitorenter 函数，这个函数不仅仅是模版解释器会调用，解释执行器也会执行这个，所以定义在 InterpreterRuntime 类下：
+从OpenJDK wiki的那张图我们知道，对于A、B线程例子的的情况一，当后来的B线程获取锁时会撤销对象的偏向锁升级为轻量级锁，下面我们从源码角度来分析。上文说了，当获取偏向锁失败，线程就会转跳到slow_case处执行 InterpreterRuntime::monitorenter 函数。这个函数不仅仅是模版解释器会调用，解释执行器也会执行这个，所以定义在 InterpreterRuntime 类下：
 
 ```cpp
 // Synchronization
@@ -1064,12 +1064,12 @@ BiasedLocking::Condition BiasedLocking::revoke_and_rebias(Handle obj, bool attem
     } else if (prototype_header->bias_epoch() != mark->bias_epoch()) {//如果偏向锁epoch过期，则进入当前分支
       //如果允许尝试获取偏向锁
       if (attempt_rebias) {
-        //本例中，fast_enter进入此分支！！！
+        //本例中，fast_enter会进入此分支！！！
         assert(THREAD->is_Java_thread(), "");
         markOop biased_value       = mark;
-        //构建心的偏向本线程的markOop
+        //构建新的偏向本线程的markOop，设置好本线程的 ThreadID 、分代年龄、epoch值
         markOop rebiased_prototype = markOopDesc::encode((JavaThread*) THREAD, mark->age(), prototype_header->bias_epoch());
-        //通过CAS 操作， 将本线程的 ThreadID 、时间错、分代年龄尝试写入对象头中
+        //通过CAS 操作， 将尝试新markOop写入对象头中
         markOop res_mark = (markOop) Atomic::cmpxchg_ptr(rebiased_prototype, obj->mark_addr(), mark);
         //CAS成功，则返回撤销和重新偏向状态
         if (res_mark == biased_value) {
@@ -1087,12 +1087,119 @@ BiasedLocking::Condition BiasedLocking::revoke_and_rebias(Handle obj, bool attem
       }
     }
   }
+  ...
+}
+```
 
-  //批量重偏向与批量撤销的逻辑
+(是不是发现这个函数的偏向锁实现与前面的`biased_locking_enter(...)`又重复了？其实这是因为这个函数不仅仅是模版解释器会调用，字节码解释器也会执行这个函数。)?
+
+`fast_enter`函数中调用了上述函数，最终进入```if (attempt_rebias)```分支，尝试获取偏向锁，先构建新的偏向本线程的markOop，设置好本线程 ThreadID 、分代年龄、epoch值，然后通过CAS 操作， 尝试将其写入对象头中。对于情况一的线程B来说，由于对象头的ThreadID为之前的线程A ID，这里会失败并继续执行后面的重偏向与撤销的逻辑。
+
+```cpp
+  //...接上一段代码
+
+  //重偏向与撤销的逻辑
+  //通过启发式的方式决定到底是执行撤销还是执行重偏向
   HeuristicsResult heuristics = update_heuristics(obj(), attempt_rebias);
-  if (heuristics == HR_NOT_BIASED) {
+  if (heuristics == HR_NOT_BIASED) {//决定不偏向
     return NOT_BIASED;
-  } else if (heuristics == HR_SINGLE_REVOKE) {//撤销单个线程
+  } else if (heuristics == HR_SINGLE_REVOKE) {//决定撤销单个线程
+    ...
+    if (mark->biased_locker() == THREAD &&
+        prototype_header->bias_epoch() == mark->bias_epoch()) {//需要撤销的是偏向当前线程的锁，当调用Object#hashcode方法时会走到这一步
+      // 撤销逻辑1...
+      ...
+      return cond;
+    } else {
+      // 撤销逻辑2...
+      ...
+      return revoke.status_code();
+    }
+  }
+  ...
+  //批量撤销、批量重偏向的逻辑...
+  ...
+  return bulk_revoke.status_code();
+```
+
+代码逻辑很简单，就是通过通过启发式（Heuristics）的方式决定到底是执行撤销还是执行重偏向。我们先来看看这个启发式策略`update_heuristics()`：
+
+```cpp
+//启发式的方式决定要做哪种操作
+static HeuristicsResult update_heuristics(oop o, bool allow_rebias) {
+  markOop mark = o->mark();
+  if (!mark->has_bias_pattern()) {
+    //不可偏向直接返回
+    return HR_NOT_BIASED;
+  }
+  //控制撤销的次数
+  // Heuristics to attempt to throttle the number of revocations.
+  // Stages:
+  // 1. Revoke the biases of all objects in the heap of this type,
+  //    but allow rebiasing of those objects if unlocked.
+  // 2. Revoke the biases of all objects in the heap of this type
+  //    and don't allow rebiasing of these objects. Disable
+  //    allocation of objects of that type with the bias bit set.
+  Klass* k = o->klass();
+  jlong cur_time = os::javaTimeMillis();
+  //获取上次执行bulk revication的时间
+  jlong last_bulk_revocation_time = k->last_biased_lock_bulk_revocation_time();
+  //获取执行bulk revocation的次数
+  int revocation_count = k->biased_lock_revocation_count();
+  //定义在globs.hpp,BiasedLockingBulkRebiasThreshold取值为20；BiasedLockingBulkRevokeThreshold取值为40,BiasedLockingDecayTime为25000毫秒，可通过JVM启动参数改变
+  if ((revocation_count >= BiasedLockingBulkRebiasThreshold) &&
+      (revocation_count <  BiasedLockingBulkRevokeThreshold) &&
+      (last_bulk_revocation_time != 0) &&
+      (cur_time - last_bulk_revocation_time >= BiasedLockingDecayTime)) {
+    // This is the first revocation we've seen in a while of an
+    // object of this type since the last time we performed a bulk
+    // rebiasing operation. The application is allocating objects in
+    // bulk which are biased toward a thread and then handing them
+    // off to another thread. We can cope with this allocation
+    // pattern via the bulk rebiasing mechanism so we reset the
+    // klass's revocation count rather than allow it to increase
+    // monotonically. If we see the need to perform another bulk
+    // rebias operation later, we will, and if subsequently we see
+    // many more revocation operations in a short period of time we
+    // will completely disable biasing for this type.
+    //在执行了一定时间之内，执行的撤销次数没有超过阈值，那么认为可以优先执行bulk rebias,因此将计数回归原始值
+    k->set_biased_lock_revocation_count(0);
+    revocation_count = 0;
+  }
+
+  // Make revocation count saturate just beyond BiasedLockingBulkRevokeThreshold
+  if (revocation_count <= BiasedLockingBulkRevokeThreshold) {
+    //对执行撤销的次数进行计数
+    revocation_count = k->atomic_incr_biased_lock_revocation_count();
+  }
+
+  if (revocation_count == BiasedLockingBulkRevokeThreshold) {
+    //达到执行bulk revoke的阈值，执行bulk revoke
+    return HR_BULK_REVOKE;
+  }
+
+  if (revocation_count == BiasedLockingBulkRebiasThreshold) {
+    //达到 bulk rebias的阈值，执行bulk rebias
+    return HR_BULK_REBIAS;
+  }
+  //默认执行单次的撤销
+  return HR_SINGLE_REVOKE;
+}
+```
+
+通过代码中的注释可以了解到启发式策略的执行逻辑。//TODO...
+
+再回到`revoke_and_rebias()`中重偏向与撤销的逻辑的分析：
+
+```cpp
+  //...接上一段代码
+
+  //重偏向与撤销的逻辑
+  //通过启发式的方式决定到底是执行撤销还是执行重偏向
+  HeuristicsResult heuristics = update_heuristics(obj(), attempt_rebias);
+  if (heuristics == HR_NOT_BIASED) {//决定不偏向
+    return NOT_BIASED;
+  } else if (heuristics == HR_SINGLE_REVOKE) {//决定撤销单个线程
     Klass *k = obj->klass();
     markOop prototype_header = k->prototype_header();
     if (mark->biased_locker() == THREAD &&
@@ -1121,14 +1228,254 @@ BiasedLocking::Condition BiasedLocking::revoke_and_rebias(Handle obj, bool attem
                                 attempt_rebias);
   VMThread::execute(&bulk_revoke);
   return bulk_revoke.status_code();
+```
+
+对于情况一，我们假设这是被锁对象头一次发生偏向撤销，因此B线程调用`update_heuristics(...)`时会返回`HR_SINGLE_REVOKE`，从而进入```else if (heuristics == HR_SINGLE_REVOKE)```分支里的`else`分支，通过调用```VMThread::execute(&revoke)```最终在VM线程中的safepoint调用`revoke_bias`方法。
+
+```cpp
+void VMThread::execute(VM_Operation* op) {
+  Thread* t = Thread::current();
+  //如果不是虚拟机线程，即普通Java线程
+  if (!t->is_VM_thread()) {
+    ...
+    // 进行前置处理，根据返回值确定是否继续
+    if (!op->doit_prologue()) {
+      return;   // op was cancelled
+    }
+    ...
+    // Add VM operation to list of waiting threads. We are guaranteed not to block while holding the
+    // VMOperationQueue_lock, so we can block without a safepoint check. This allows vm operation requests
+    // to be queued up during a safepoint synchronization.
+    //添加到VM operation等待执行
+    {
+      VMOperationQueue_lock->lock_without_safepoint_check();
+      bool ok = _vm_queue->add(op);
+    op->set_timestamp(os::javaTimeMillis());
+      VMOperationQueue_lock->notify();
+      VMOperationQueue_lock->unlock();
+      // VM_Operation got skipped
+      if (!ok) {
+        assert(concurrent, "can only skip concurrent tasks");
+        if (op->is_cheap_allocated()) delete op;
+        return;
+      }
+    }
+    if (execute_epilog) {
+      //  进行后置处理
+      op->doit_epilogue();
+    }
+  } else {//如果已经是虚拟机线程
+    // invoked by VM thread; usually nested VM operation
+    ...
+    op->evaluate();
+    ...
+  }
 }
 ```
 
-(是不是发现这个函数的偏向锁实现与前面的`biased_locking_enter(...)`重复了？其实这是因为这个函数不仅仅是模版解释器会调用，字节码解释器也会执行这个函数。)?
+evaluate()会回调VM_Operation类的doit()虚函数：
 
-`fast_enter`函数中调用了上述函数，最终进入```if (attempt_rebias)```分支，尝试获取偏向锁，通过CAS 操作， 将本线程的 ThreadID 、时间错、分代年龄尝试写入对象头中。若成功了则返回BIAS_REVOKED_AND_REBIASED，使`fast_enter` 返回，否则fast_enter将会 fall back 到 slow_enter。
+```cpp
+//  回调doit()
+void VM_Operation::evaluate() {
+  ...
+  doit();
+  ...
+}
+```
 
-> 前文提到，若对象计算并保存了hashCode到对象的Mark Word中，会导致该对象无法被偏向锁锁定，[Oracle这篇文章](https://blogs.oracle.com/dave/biased-locking-in-hotspot)就有说到。而且，如果该对象已经偏向，如果如果我们没有重写默认的hashCode方法，默认的hashCode要通过`ObjectSynchronizer::FastHashCode`函数计算identity hashcode，这将导致偏向锁的撤销。
+VM_RevokeBias继承了VM_Operation并重写了doit_prologue()和doit()两个虚函数，doit()中完成了撤销偏向锁：
+
+```cpp
+//  VM_RevokeBias继承了VM_Operation
+//  并重写了doit_prologue()和doit()两个虚函数
+class VM_RevokeBias : public VM_Operation {
+...
+public:
+...
+  virtual VMOp_Type type() const { return VMOp_RevokeBias; }
+
+  // 如vm_operations.hpp注释描述的，若返回false则取消该VM操作
+  virtual bool doit_prologue() {
+    // Verify that there is actual work to do since the callers just
+    // give us locked object(s). If we don't find any biased objects
+    // there is nothing to do and we avoid a safepoint.
+    //  若被锁对象为空，则返回true继续后续逻辑即通过evaluate()回调doit()
+    if (_obj != NULL) {
+      markOop mark = (*_obj)()->mark();
+      if (mark->has_bias_pattern()) {
+        return true;
+      }
+    } else {
+      for ( int i = 0 ; i < _objs->length(); i++ ) {
+        //  遍历被锁对象，若存在可偏向状态，返回true继续后续逻辑即通过evaluate()回调doit()
+        markOop mark = (_objs->at(i))()->mark();
+        if (mark->has_bias_pattern()) {
+          return true;
+        }
+      }
+    }
+    // 没有可偏向状态，返回true继续后续逻辑即通过evaluate()回调doit()
+    return false;
+  }
+
+  virtual void doit() {
+    //  被锁对象不为空
+    if (_obj != NULL) {
+      _status_code = revoke_bias((*_obj)(), false, false, _requesting_thread);
+      ...
+      return;
+    } else {
+      ...
+    }
+  }
+
+  BiasedLocking::Condition status_code() const {
+    return _status_code;
+  }
+};
+```
+
+doit()又调用了revoke_bias：
+
+```cpp
+static BiasedLocking::Condition revoke_bias(oop obj, bool allow_rebias, bool is_bulk, JavaThread* requesting_thread) {
+  //  获取对象头
+  markOop mark = obj->mark();
+  if (!mark->has_bias_pattern()) {
+    ...
+    //  不是可偏向状态，返回
+    return BiasedLocking::NOT_BIASED;
+  }
+
+  uint age = mark->age();
+  //新建可偏向锁的头：分代年龄为age、可偏向(101)状态
+  markOop   biased_prototype = markOopDesc::biased_locking_prototype()->set_age(age);
+  //新建非偏向锁的头:无hash、分代年龄为age、无锁(001)状态
+  markOop unbiased_prototype = markOopDesc::prototype()->set_age(age);
+  ....
+  //获取偏向的线程
+  JavaThread* biased_thread = mark->biased_locker();
+  if (biased_thread == NULL) {
+    // Object is anonymously biased. We can get here if, for
+    // example, we revoke the bias due to an identity hash code
+    // being computed for an object.
+    //  没有偏向线程，identity hash code的计算会导致进入此分支
+    if (!allow_rebias) {
+      //  设置对象头为前面构建的非偏向头:无hash、分代年龄为age、无锁(001)状态
+      obj->set_mark(unbiased_prototype);
+    }
+    //  偏向锁撤销完成
+    return BiasedLocking::BIAS_REVOKED;
+  }
+
+  // Handle case where the thread toward which the object was biased has exited
+  //对象头偏向线程是否活着
+  bool thread_is_alive = false;
+  if (requesting_thread == biased_thread) {
+    //当前请求线程==对象头偏向线程，说明偏向线程活着
+    thread_is_alive = true;
+  } else {
+    //  遍历存活线程队列，看看能不能找到对象头偏向线程
+    for (JavaThread* cur_thread = Threads::first(); cur_thread != NULL; cur_thread = cur_thread->next()) {
+      if (cur_thread == biased_thread) {
+        //  能找到说明对象头的偏向线程活着
+        thread_is_alive = true;
+        break;
+      }
+    }
+  }
+  //  如果对象头偏向线程已退出，则撤销偏向锁
+  if (!thread_is_alive) {
+    if (allow_rebias) {
+      //  设置可偏向锁头:分代年龄为age、可偏向(101)状态
+      obj->set_mark(biased_prototype);
+    } else {//由于传入该函数的allow_rebias==false，故走此分支
+      //  设置非偏向锁头:无hash、分代年龄为age、无锁(001)状态
+      obj->set_mark(unbiased_prototype);
+    }
+    //  偏向锁撤销完成
+    return BiasedLocking::BIAS_REVOKED;
+  }
+
+  // 注释解释了逻辑：
+  // Thread owning bias is alive.
+  // Check to see whether it currently owns the lock and, if so,
+  // write down the needed displaced headers to the thread's stack.
+  // Otherwise, restore the object's header either to the unlocked
+  // or unbiased state.
+
+  //get_or_compute_monitor_info返回对象头偏向线程的所有的被锁住的对象(轻量级锁)的监视器信息(Lock Record)
+  GrowableArray<MonitorInfo*>* cached_monitor_info = get_or_compute_monitor_info(biased_thread);
+  BasicLock* highest_lock = NULL;
+  //在偏向线程的线程栈中寻找当前被(轻量级)锁对象(obj)对应的displaced_header(一种markOop)，
+  //则需要重新设置其对象头markOop，这里先将其设为NULL
+  for (int i = 0; i < cached_monitor_info->length(); i++) {
+    MonitorInfo* mon_info = cached_monitor_info->at(i);
+    if (mon_info->owner() == obj) {
+      // Assume recursive case and fix up highest lock later
+      markOop mark = markOopDesc::encode((BasicLock*) NULL);
+      highest_lock = mon_info->lock();
+      //设置栈中的displaced_header为NULL  
+      highest_lock->set_displaced_header(mark);
+    }
+    ...
+  }
+  //  如果上面的过程找到了displaced_header，则highest_lock不为空
+  //  说明当前撤销偏向的对象正在被偏向头里的线程锁定，进入下面分支，
+  //  对正在被(轻量级)锁定的对象进行偏向锁撤销
+  if (highest_lock != NULL) {
+    // Fix up highest lock to contain displaced header and point
+    // object at it
+    // 如上面注释所言，重新设置线程栈上的displaced header，用unbiased_prototype
+    highest_lock->set_displaced_header(unbiased_prototype);
+    // Reset object header to point to displaced mark.
+    // 使对象头(mark)指向这个displaced header
+    obj->release_set_mark(markOopDesc::encode(highest_lock));
+    ...
+    //对正在被(轻量级)锁定的对象进行偏向锁撤销完成
+  } else {//  如果上面的过程没找displaced_header，说明当前撤销偏向锁
+          //  的对象目前没有被(轻量级)锁定，进入这个分支，对未锁定对象进行偏向撤销
+    if (allow_rebias) {
+      obj->set_mark(biased_prototype);
+    } else {//由于传入该函数的allow_rebias==false，故走此分支
+      // Store the unlocked value into the object's header.
+      obj->set_mark(unbiased_prototype);
+      //对未锁定对象进行偏向锁撤销完成，也表明对象成为了:无hash、分代年龄为age、无锁(001)状态
+    }
+  }
+  //  偏向撤销完成
+  return BiasedLocking::BIAS_REVOKED;
+}
+```
+
+这里解释一下，轻量级锁在虚拟机内部，使用一个成为BasicObjectLock的对象实现的，这个对象内部由一个BasicLock对象和一个持有该锁的Java对象指针组成。BasicObjectLock对象放置在Java栈帧中。在BasicLock对象内部还维护着displaced_header字段，用于备份对象头部的Mark Word。还记得吗，当一个线程持有一个对象的轻量级锁的时候，对象头部Mark Word信息如下：
+
+```cpp
+//    [ptr             | 00]  locked  
+```
+
+末尾的两位比特为00，整个Mark Word为指向BasicLock对象的指针。由于BasicObjectLock对象在线程栈中，因此该指针必然指向持有该锁的线程栈空间。当需要判断一个线程是否持有该对象时，只需要简单地判断对象头的指针是否在当前线程的栈地址范围即可。同时，BasicLock对象的displaced_header，备份了原对象的Mark word内容，BasicObjectLock对象的obj字段则指向持有锁的对象头部。
+
+前面说到B线程最总调用了revoke_bias进行偏向锁撤销（以及升级为轻量级锁）。从上面的代码我们看出，由于被锁对象还不是轻量级锁，线程栈中没有它对应的Lock Record，又由于传入该函数的allow_rebias==false，所以在这里会进入下面的如下分支：
+
+```cpp
+...
+else {//由于传入该函数的allow_rebias==false，故走此分支
+      // Store the unlocked value into the object's header.
+      obj->set_mark(unbiased_prototype);
+      //对未锁定对象进行偏向锁撤销完成，也表明对象成为了:从而成为了无hash、分代年龄为age、无锁(001)状态。
+    }
+  }
+  //  偏向撤销完成
+  return BiasedLocking::BIAS_REVOKED;
+```
+
+从而成为了无hash、分代年龄为age、无锁(001)状态。至此情况一的分析就完成了。对于情况二，即B进入时A还未释放锁的情况，请读者对照上面的源码自行分析。
+(//TODO
+~~与情况一类似，线程B使用VMThread::execute()执行VM_RevokeBias中的doit()方法->revoke_bias()，最终返回的status_code为BIAS_REVOKED，于是在fast_enter中没有进入```if (cond == BiasedLocking::BIAS_REVOKED_AND_REBIASED)```分支返回，fallback到了slow_enter中。~~)
+
+> 前文提到，若对象计算并保存了hashCode到对象的Mark Word中，会导致该对象无法被偏向锁锁定，[Oracle这篇文章](https://blogs.oracle.com/dave/biased-locking-in-hotspot)就有说到。而且，如果该对象已经偏向，如果如果我们没有重写默认的hashCode方法，默认的hashCode要通过`ObjectSynchronizer::FastHashCode`函数计算identity hashcode，该函数会调用revoke_and_rebias，这将导致偏向锁的撤销。
 >
 > ```cpp
 > intptr_t ObjectSynchronizer::FastHashCode (Thread * Self, oop obj) {
@@ -1144,7 +1491,7 @@ BiasedLocking::Condition BiasedLocking::revoke_and_rebias(Handle obj, bool attem
 
 ### inflate 成为重锁
 
-从 fast_enter 函数中可以看到，大部分情况下，我们会执行到 slow_enter 函数中：
+从 fast_enter 函数中可以看到，我们可能会执行到 slow_enter 函数中：
 
 ```cpp
 // Interpreter/Compiler Slow Case
