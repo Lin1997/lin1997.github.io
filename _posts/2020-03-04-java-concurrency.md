@@ -798,7 +798,7 @@ Space losses: 0 bytes internal + 3 bytes external = 3 bytes total
 
 上面我们详细介绍了 JVM 中的各种锁优化的技术细节，现在我们看下在 JVM 的代码实现上是如何操作的。我们回到之前对代码的分析。
 
-## synchronized的底层实现
+## synchronized的底层代码分析
 
 ### 获得偏向锁
 
