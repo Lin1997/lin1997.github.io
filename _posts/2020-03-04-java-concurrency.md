@@ -610,12 +610,12 @@ void TemplateTable::monitorenter() {
     __ cmov(Assembler::equal, c_rarg1, c_rarg3);
     // 检查Lock Record的_obj属性是否就是被锁对象(lockee)
     __ cmpptr(rax, Address(c_rarg3, BasicObjectLock::obj_offset_in_bytes()));
-    // 是的话就跳转到exit标签，停止搜索
+    // 是的话代表这是锁重入，就跳转到exit标签，停止搜索
     __ jccb(Assembler::equal, exit);
     // 否则指针移向向下一个Lock Record
     __ addptr(c_rarg3, entry_size);
     __ bind(entry);
-    // 检查是否到栈底了
+    // 检查是否到栈顶了
     __ cmpptr(c_rarg3, c_rarg2);
     __ jcc(Assembler::notEqual, loop);//没到底就跳转回loop标签，继续循环
     /*结束*/
@@ -1154,7 +1154,7 @@ void TemplateTable::monitorexit() {
     // 否则指针移向向下一个Lock Record
     __ addptr(c_rarg1, entry_size);
     ...
-    // 检查是否到栈底了
+    // 检查是否到栈顶了
     __ cmpptr(c_rarg1, c_rarg2);
     //没到底就跳转回loop标签，继续循环
     __ jcc(Assembler::notEqual, loop);
