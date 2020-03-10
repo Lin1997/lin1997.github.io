@@ -722,7 +722,7 @@ void InterpreterMacroAssembler::lock_object(Register lock_reg) {
             CAST_FROM_FN_PTR(address, InterpreterRuntime::monitorenter),
             lock_reg);
     ......
-    // 直接跳到这表明获取锁成功，接下来就会返回到entry_point例程进行字节码的执行了。
+    // 直接跳到这表明获取锁成功，接下来就会返回到同步代码块里进行字节码的执行了。
   }
 }
 ```
@@ -962,7 +962,7 @@ void InterpreterMacroAssembler::lock_object(Register lock_reg) {
 
 `biased_locking_enter(...)`用于获取偏向锁，代码比较长，下面将一步步分析。`macroAssembler_x86.cpp`
 
-#### 1. 判断锁对象是否为偏向锁状态
+#### 1. 判断锁对象是否为可偏向状态
 
 ```cpp
 // mark_addr:锁对象头中的markOop指针。
@@ -987,17 +987,17 @@ movptr(tmp_reg, swap_reg);
 // 即(是否偏向锁+锁标志位)
 andptr(tmp_reg, markOopDesc::biased_lock_mask_in_place);
 // 将上面结果，即(是否偏向锁+锁标志位)和biased_lock_pattern再次比较(biased_lock_pattern为5，即101)，
-// 如果不相等，则表明不为偏向锁状态，需要进行CAS操作，跳往cas_label(在该函数最后return处)，
-// 交回lock_object中处理；否则即为偏向锁状态，接着往下走。
+// 如果不相等，则表明不为可偏向状态，需要进行CAS操作，跳往cas_label(在该函数最后return处)，
+// 交回lock_object中处理；否则即为可偏向状态，接着往下走。
 cmpptr(tmp_reg, markOopDesc::biased_lock_pattern);
 jcc(Assembler::notEqual, cas_label);
 ```
 
 对于上文的A、B线程例子的的情况一：线程A将继续执行下面步骤获取偏向锁；由于假设B在A释放锁后进入同步代码块，此时被锁对象处于可偏向状态（见后文，其实偏向锁的释放没有改变mark word），故B也继续执行下面步骤。
 
-#### 2. 判断锁对象之前是否已经偏向当前线程
+#### 2. 判断锁对象是否已经偏向当前线程
 
-走到这，表明锁对象已经为偏向锁态，需要判断锁对象之前是否已经偏向当前线程。
+走到这，表明锁对象已经为偏向锁态，需要判断锁对象是否已经偏向当前线程。
 
 ```cpp
 // 将锁对象所属类的prototype_header移动至tmp_reg中，prototype_header中存储的也是markOop。
@@ -1008,11 +1008,12 @@ jcc(Assembler::notEqual, cas_label);
 // 其实也就是虚拟机认为该对象不适合偏向锁。
 load_prototype_header(tmp_reg, obj_reg);
 
+// 构造一个新的markOop:
 // 将当前线程id和类的prototype_header相或，
 // 这样得到的markOop为(当前线程id + prototype_header中的(epoch + 分代年龄 + 偏向锁标志 + 锁标志位))，
 // 注意prototype_header的分代年龄那4个字节为0
 orptr(tmp_reg, r15_thread);
-// 将上面计算得到的结果与锁对象的markOop进行异或，tmp_reg中相等的位全部被置为0，只剩下不相等的位。
+// 将上面构造的新markOop与锁对象的markOop进行异或，tmp_reg中相等的位全部被置为0，只剩下不相等的位。
 xorptr(tmp_reg, swap_reg);
 Register header_reg = tmp_reg;
 // 对((int) markOopDesc::age_mask_in_place)进行按位取反，age_mask_in_place为...0001111000,
@@ -1021,7 +1022,7 @@ Register header_reg = tmp_reg;
 // 即将上面异或得到的结果中分代年龄给忽略掉。
 andptr(header_reg, ~((int) markOopDesc::age_mask_in_place));
 // 如果除了分代年龄，对象的markOop和（当前线程id+其他位）相等，那么上面与操作的结果应该为0，
-// 表明对象之前已经偏向当前线程，即markOop中存放有当前线程id，那么跳到done处，直接进入方法执行即可；
+// 表明对象之前已经偏向当前线程，即markOop中存放有当前线程id，那么跳到done处，直接进入同步代码块执行即可；
 // 否则表明当前线程还不是偏向锁的持有者，会接着往下走。
 jcc(Assembler::equal, done);
 ```
@@ -1030,11 +1031,16 @@ jcc(Assembler::equal, done);
 
 #### 3. 判断是否需要撤销锁对象的偏向
 
-走到这，表明锁对象并没有偏向当前线程，接下来判断是否需要撤销锁对象的偏向。
+走到这，表明锁对象是可偏向状态但并没有偏向当前线程，接下来判断是否需要撤销锁对象的偏向。
 
 ```cpp
-// (将header_reg和111相与，如果结果不为0，则表明header_reg后三位存在不为0的位，证明之前进行异或时，类的prototype_header后面三位与对象markOop的后三位不相等，但是)? 能走到这，表明对象markword后三位为101，即偏向模式。现在类的prototype_header和对象markOop后三位不相等，即对象所属类不再支持偏向，发生了bulk_revoke，所以需要对当前对象进行偏向锁的撤销；否则表明目前该类还支持偏向锁，接着往下走。
+// test指令使header_reg(前面的异或结果)和biased_lock_mask_in_place(即二进制111)进行与运算
 testptr(header_reg, markOopDesc::biased_lock_mask_in_place);
+// 如果不为0表示 类prototype_header和对象markOop后三位不相等，
+// 而能走到这，表明对象markword后三位为101，即偏向模式，
+// 因此，test指令结果不为0表明了对象所属类不再支持偏向，发生了bulk_revoke，
+// 所以需要对当前对象进行偏向锁的撤销；
+// 否则表明目前该类还支持偏向锁，接着往下走。
 jccb(Assembler::notZero, try_revoke_bias);
 ```
 
@@ -1045,7 +1051,11 @@ jccb(Assembler::notZero, try_revoke_bias);
 走到这，表明锁对象还支持偏向锁，需要判断当前对象的epoch是否合法，如果不合法，需要取进行重偏向。合法的话接着往下走。
 
 ```cpp
-// 测试对象所属类的prototype_header中epoch是否为0，不为0的话则表明之前异或时，类的prototype_header中epoch和对象markOop的epoch不相等，表明类在对象分配后发生过bulk_rebais()（前面提到过，每次发生bulk_rebaise,类的prototype header中的epoch都会+1），所以之前对象的偏向就无效了，需要进行重偏向。否则接着往下走。
+// 测试对象所属类的prototype_header中epoch是否为0，不为0的话则表明之前异或时，
+// 类的prototype_header中epoch和对象markOop的epoch不相等，
+// 表明类在对象分配后发生过bulk_rebais()（前面提到过，每次发生bulk_rebaise,
+// 类的prototype header中的epoch都会+1），
+// 所以之前对象的偏向就无效了，需要进行重偏向，转跳到try_rebias标签。否则接着往下走。
 testptr(header_reg, markOopDesc::epoch_mask_in_place);
 jccb(Assembler::notZero, try_rebias);
 ```
@@ -1057,18 +1067,22 @@ jccb(Assembler::notZero, try_rebias);
 走到这，表明锁对象的偏向态合法，可以尝试去获取锁，使对象偏向当前线程。
 
 ```cpp
-// swap_reg存放着mark_addr
-// 故此处是取出对象markOop中除线程id之外的其他位
+// 取出对象markOop中除线程id之外的其他位，即代表匿名偏向状态的markOop，放入swap_reg
 andptr(swap_reg,
         markOopDesc::biased_lock_mask_in_place | markOopDesc::age_mask_in_place | markOopDesc::epoch_mask_in_place);
-// 将其他位移动至 tmp_reg。
+// 将匿名偏向状态的markOop移动至 tmp_reg，准备构建新的markOop
 movptr(tmp_reg, swap_reg);
-// 将其他位和当前线程id进行或，构造成一个新的完整的一个字(32bit/64bit)的markOop,存入tmp_reg中。新的markOop因为保存了当前线程id，所以会偏向当前线程。
+// 将其他位和当前线程id进行或，构造成一个新的完整的一个字(32bit/64bit)的markOop,存入tmp_reg中。
+// 新的markOop因为保存了当前线程id，表示偏向当前线程。
 orptr(tmp_reg, r15_thread);
 // 尝试利用CAS操作将新构成的markOop存入对象头的mark_addr处，如果设置成功，则获取偏向锁成功。
-// 这里说明下，cmpxchgptr操作会强制将rax寄存器（swap_reg）中内容作为老数据，与第二个参数，在这里即mark_addr处的内容进行比较，如果相等，则将第一个参数的内容，即tmp_reg中的新数据，存入mark_addr。
+// 这里说明下，cmpxchgptr操作会强制将rax寄存器（swap_reg）中内容作为老数据，与第二个参数，
+// 在这里即mark_addr处的内容进行比较，如果相等(代表原本的markOop就是匿名偏向对象)，
+// 则将第一个参数的内容，即tmp_reg中的新数据，存入mark_addr。
 cmpxchgptr(tmp_reg, mark_addr); // compare tmp_reg and swap_reg
-// 上面CAS操作失败的情况下，表明对象头中的markOop数据已经被篡改，即有其他线程已经获取到偏向锁，因为偏向锁不容许多个线程访问同一个锁对象，所以需要跳到slow_case处，去撤销该对象的偏向锁，并进行锁升级。
+// 上面CAS操作若成功，就完成了偏向锁的获取；
+// 上面CAS操作若干失败，表明对象头中的markOop数据已经被篡改，即该锁对象已经偏向其他线程，
+// 因为偏向锁不容许多个线程访问同一个锁对象，所以需要跳到slow_case处，去撤销该对象的偏向锁，并进行锁升级。
 if (slow_case != NULL) {
   //  若成功ZF标志(Zero Flag)被设置，notZero不成立，不跳转，继续执行；
   //  反之，跳转到slow_case处
@@ -1088,9 +1102,10 @@ jmp(done);
 bind(try_rebias);
 // 将锁对象所属类的prototype_header送入tmp_reg。
 load_prototype_header(tmp_reg, obj_reg);
-// 尝试用CAS操作，使对象的markOop重置为无线程id的偏向锁态，即不偏向任何线程。
+// 尝试用CAS操作，使对象的markOop重置为无线程id的可偏向态，即不偏向任何线程。
 cmpxchgptr(tmp_reg, mark_addr);
-// 和第5步一样，如果CAS失败，则表明对象头的markOop数据已经被其他线程更改，需要跳往slow_case进行撤销偏向锁，否则跳往done处，执行字节码。
+// 和第5步一样，如果CAS失败，则表明对象头的markOop数据已经被其他线程更改，
+// 需要跳往slow_case进行撤销偏向锁，否则跳往done处，执行字节码。
 if (slow_case != NULL) {
   jcc(Assembler::notZero, *slow_case);
 }
@@ -1099,10 +1114,13 @@ jmp(done);
 
 ```cpp
 bind(try_revoke_bias);
-// 走到这，表明这个类的prototype_header中已经没有偏向锁的位了，即这个类的所有对象都不再支持偏向锁了，但是当前对象仍为偏向锁状态，所以我们需要重置下当前对象的markOop为无锁态。
-// 将锁对象所属类的prototype_header送入tmp_reg。
+// 走到这，表明这个类的prototype_header中已经没有可偏向的位了，
+// 即这个类的所有对象都不再支持偏向锁了，但是当前对象仍为可偏向状态，
+// 所以我们需要重置下当前对象的markOop为无锁态。
+// 将锁对象所属类的prototype_header(无锁态)送入tmp_reg。
 load_prototype_header(tmp_reg, obj_reg);
-// 尝试用CAS操作，使对象的markOop重置为无锁态。这里是否失败无所谓，即使失败了，也表明其他线程已经移除了对象的偏向锁标志。
+// 尝试用CAS操作，使对象的markOop重置为无锁态。
+// 这里是否失败无所谓，即使失败了，也表明其他线程已经移除了对象的偏向锁标志。
 cmpxchgptr(tmp_reg, mark_addr);
 //接下来会回到lock_object()方法中，继续轻量级锁的获取。
 ```
@@ -1178,7 +1196,7 @@ void InterpreterMacroAssembler::unlock_object(Register lock_reg) {
   ...
   // 如果是递归的情况
   testptr(header_reg, header_reg);
-  // 就直接专挑到done，结束执行
+  // 就直接转跳到done，结束执行
   jcc(Assembler::zero, done);
   ...
   // 要将Displaced Mark Word CAS到对象头的Mark Word
@@ -1253,7 +1271,7 @@ void ObjectSynchronizer::fast_enter(Handle obj, BasicLock* lock,
   if (UseBiasedLocking) {
     //如果不处于全局安全点，即正常的Java线程
     if (!SafepointSynchronize::is_at_safepoint()) {
-      //通过`revoke_and_rebias`这个函数尝试获取偏向锁
+      //通过`revoke_and_rebias`这个函数尝试撤销或重偏向偏向锁
       BiasedLocking::Condition cond = BiasedLocking::revoke_and_rebias(obj, attempt_rebias, THREAD);
       if (cond == BiasedLocking::BIAS_REVOKED_AND_REBIASED) {
         return;
@@ -1310,7 +1328,7 @@ BiasedLocking::Condition BiasedLocking::revoke_and_rebias(Handle obj, bool attem
       assert(!(*(obj->mark_addr()))->has_bias_pattern(), "even if we raced, should still be revoked");
       return BIAS_REVOKED;
     } else if (prototype_header->bias_epoch() != mark->bias_epoch()) {//如果偏向锁epoch过期，则进入当前分支
-      //如果允许尝试获取偏向锁
+      //如果允许尝试重新偏向
       if (attempt_rebias) {
         assert(THREAD->is_Java_thread(), "");
         markOop biased_value       = mark;
@@ -1742,7 +1760,7 @@ void ObjectSynchronizer::fast_enter(Handle obj, BasicLock* lock,
   if (UseBiasedLocking) {
     //如果不处于全局安全点，即正常的Java线程
     if (!SafepointSynchronize::is_at_safepoint()) {
-      //通过`revoke_and_rebias`这个函数尝试获取偏向锁
+      //通过`revoke_and_rebias`这个函数尝试撤销或重偏向偏向锁
       BiasedLocking::Condition cond = BiasedLocking::revoke_and_rebias(obj, attempt_rebias, THREAD);
       if (cond == BiasedLocking::BIAS_REVOKED_AND_REBIASED) {
         return;
@@ -1850,7 +1868,7 @@ BiasedLocking::Condition BiasedLocking::revoke_and_rebias(Handle obj, bool attem
   ...
 
   assert((heuristics == HR_BULK_REVOKE) ||
-         (heuristics == HR_BULK_REBIAS), "?");	
+         (heuristics == HR_BULK_REBIAS), "?");
    //code 2：批量撤销、批量重偏向的逻辑
   VM_BulkRevokeBias bulk_revoke(&obj, (JavaThread*) THREAD,
                                 (heuristics == HR_BULK_REBIAS),
