@@ -1100,9 +1100,12 @@ jmp(done);
 
 ```cpp
 bind(try_rebias);
-// 将锁对象所属类的prototype_header送入tmp_reg。
+// 构建一个偏向当前线程的markOop
+// 先将锁对象所属类的prototype_header送入tmp_reg。
 load_prototype_header(tmp_reg, obj_reg);
-// 尝试用CAS操作，使对象的markOop重置为无线程id的可偏向态，即不偏向任何线程。
+// 设置当前线程ID到tmp_reg里，此时markOop为偏向当前线程的markOop
+orptr(tmp_reg, r15_thread);
+// 尝试用CAS操作，将新建的markOop设置到对象的mark word中
 cmpxchgptr(tmp_reg, mark_addr);
 // 和第5步一样，如果CAS失败，则表明对象头的markOop数据已经被其他线程更改，
 // 需要跳往slow_case进行撤销偏向锁，否则跳往done处，执行字节码。
