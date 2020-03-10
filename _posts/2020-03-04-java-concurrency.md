@@ -1126,6 +1126,8 @@ load_prototype_header(tmp_reg, obj_reg);
 // 这里是否失败无所谓，即使失败了，也表明其他线程已经移除了对象的偏向锁标志。
 cmpxchgptr(tmp_reg, mark_addr);
 //接下来会回到lock_object()方法中，继续轻量级锁的获取。
+bind(cas_label);
+return null_check_offset;
 ```
 
 ### 退出偏向锁
