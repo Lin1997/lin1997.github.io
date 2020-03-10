@@ -1199,7 +1199,7 @@ void InterpreterMacroAssembler::unlock_object(Register lock_reg) {
   // 就直接转跳到done，结束执行
   jcc(Assembler::zero, done);
   ...
-  // 要将Displaced Mark Word CAS到对象头的Mark Word
+  // 要将Displaced Mark Word通过CAS设置到对象头的Mark Word
   if (os::is_MP()) lock();
   cmpxchgptr(header_reg, Address(obj_reg, 0));
 
@@ -1584,7 +1584,7 @@ public:
     // Verify that there is actual work to do since the callers just
     // give us locked object(s). If we don't find any biased objects
     // there is nothing to do and we avoid a safepoint.
-    //  若被锁对象为空，则返回true继续后续逻辑即通过evaluate()回调doit()
+    //  若被锁对象不为空，则返回true继续后续逻辑即通过evaluate()回调doit()
     if (_obj != NULL) {
       markOop mark = (*_obj)()->mark();
       if (mark->has_bias_pattern()) {
@@ -1694,13 +1694,13 @@ static BiasedLocking::Condition revoke_bias(oop obj, bool allow_rebias, bool is_
   GrowableArray<MonitorInfo*>* cached_monitor_info = get_or_compute_monitor_info(biased_thread);
   BasicLock* highest_lock = NULL;
   //遍历偏向线程的线程栈的所有Lock Record，寻找当前被锁对象(obj)对应的Lock Record，
-  //若找到，说明偏向的线程还在执行同步代码块中的代码，需要升级为轻量级锁
+  //若找到，说明偏向的线程还在执行同步代码块中的代码，需要进行锁膨胀
   for (int i = 0; i < cached_monitor_info->length(); i++) {
     MonitorInfo* mon_info = cached_monitor_info->at(i);
     if (mon_info->owner() == obj) {// 找到了
       // Assume recursive case and fix up highest lock later
 
-      // 需要升级为轻量级锁，直接修改偏向线程栈中的Lock Record。
+      // 需要锁膨胀，直接修改偏向线程栈中的Lock Record。
       // 由于要处理锁重入的case，在这里暂时只将Lock Record的Displaced Mark Word设置为null，
       // 其余处理Lock Record会在下面的代码中再进行
       markOop mark = markOopDesc::encode((BasicLock*) NULL);
@@ -1722,7 +1722,7 @@ static BiasedLocking::Condition revoke_bias(oop obj, bool allow_rebias, bool is_
     // 使对象头(mark)指向这个displaced header
     obj->release_set_mark(markOopDesc::encode(highest_lock));
     ...
-    //对正在被锁定的对象进行偏向锁撤销且升级为轻量级锁完成
+    //对正在被锁定的对象进行偏向锁撤销完成，并没有改变对象头的锁状态，而是回到fast_enter继续锁膨胀过程
   } else {//  如果上面的过程没找displaced_header，说明当前撤销偏向锁
           //  的对象目前没有被锁定，即已经不在同步块中了，
           //  进入这个分支，对未锁定对象进行偏向撤销
@@ -1789,10 +1789,10 @@ void ObjectSynchronizer::fast_enter(Handle obj, BasicLock* lock,
 void ObjectSynchronizer::slow_enter(Handle obj, BasicLock* lock, TRAPS) {
   markOop mark = obj->mark();
   assert(!mark->has_bias_pattern(), "should not see bias pattern here");
-  if (mark->is_neutral()) {//如果当前是无锁状态, markword的biase_lock:0，lock:01
+  if (mark->is_neutral()) {//如果是无锁状态, markword的biase_lock:0，lock:01
     // Anticipate successful CAS -- the ST of the displaced mark must
     // be visible <= the ST performed by the CAS.
-    //直接把mark保存到BasicLock对象的_displaced_header字段
+    //通过CAS把mark保存到BasicLock对象的_displaced_header字段
     lock->set_displaced_header(mark);
     if (mark == obj()->cas_set_mark((markOop) lock, mark)) {
       TEVENT(slow_enter: release stacklock);
@@ -1800,24 +1800,28 @@ void ObjectSynchronizer::slow_enter(Handle obj, BasicLock* lock, TRAPS) {
     }
     // Fall through to inflate() ...
   } else if (mark->has_locker() &&
-             THREAD->is_lock_owned((address)mark->locker())) {//如果markword处于加锁状态、且markword中的ptr指针指向当前线程的栈帧，表示为重入操作，不需要争抢锁
+             THREAD->is_lock_owned((address)mark->locker())) {//如果markword处于加锁状态、且markword中的ptr指针指向当前线程的栈帧，表示为轻量级锁重入，不需要争抢锁
     assert(lock != mark->locker(), "must not re-lock the same lock");
     assert(lock != (BasicLock*)obj->mark(), "don't relock with same BasicLock");
     lock->set_displaced_header(NULL);
     return;
   }
+  
+  // 这时候需要膨胀为重量级锁，膨胀前，设置Displaced Mark Word为一个特殊值，
+  // 代表该锁正在用一个重量级锁的monitor
   // The object header will never be displaced to this lock,
   // so it does not matter what the value is, except that it
   // must be non-zero to avoid looking like a re-entrant lock,
   // and must not look locked either.
   lock->set_displaced_header(markOopDesc::unused_mark());
+  //先调用inflate膨胀为重量级锁，该方法返回一个ObjectMonitor对象，然后调用其enter方法
   ObjectSynchronizer::inflate(THREAD,
                               obj(),
                               inflate_cause_monitor_enter)->enter(THREAD);
 }
 ```
 
-这里的执行逻辑比较简洁，主要执行上面 OpenJDK wiki 中的锁优化逻辑。首先会判断对象锁是否为中立的（neutral）：
+这里的执行逻辑比较简洁，主要执行上面 OpenJDK wiki 中的锁优化逻辑。首先会判断对象锁是否为是无锁状态(中立的(neutral))：
 
 ```cpp
 bool is_neutral()  const {
@@ -1835,25 +1839,6 @@ JavaThread*:54 epoch:2 unused:1   age:4    biased_lock:1 lock:2 (biased object)
 ```
 
 可以看到，无论是普通对象或者是可偏向的对象，最后 3 个 bit 的格式是固定的，我们再次看下上面 OpenJDK wiki 中的锁优化图，会发现在普通对象的时候，也就是 biase revoke 时 unlock 状态下的 header 最后三个 bit 就是 001，也就是十进制的 1！所以这里通过简单高效的二进制运算就获得了对象的锁定状态。
-
-再次回到上面的 slow_enter 函数，如果判断为中立的，也就是没有偏向锁定的话，会执行：
-
-```cpp
-if (mark->is_neutral()) {
-    // Anticipate successful CAS -- the ST of the displaced mark must
-    // be visible <= the ST performed by the CAS.
-    lock->set_displaced_header(mark);
-    if (mark == obj()->cas_set_mark((markOop) lock, mark)) {
-      TEVENT(slow_enter: release stacklock);
-      return;
-    }
-    // Fall through to inflate() ...
-}
-```
-
-首先将当前的 mark word，存储到 lock 指针指向的对象中，这里的 lock 指针指向的就是上面提到的 lock record。然后进行一个非常重要的操作，就是通过原子 cas 操作将这个 lock 指针安装到对象 mark word 中，如果安装成功就表示当前线程获得了这个（轻量级）对象锁，可以直接返回执行同步代码块了，否则就会 fall back 到膨胀锁中，正如注释说的那样。
-
-对于情况一中的B线程，在此处假设没有竞争，那么将成功获得轻量级锁，至此情况一的分析就完成了。
 
 ### 批量重偏向和批量撤销
 
@@ -2055,21 +2040,237 @@ code 4处理当前正在被使用的锁对象，通过遍历所有存活线程�
 
 ### 膨胀为重锁
 
-对于情况二，即B线程进入时A线程还未释放锁的情况，即当线程进来的发现当前的对象锁已经被另外一个线程锁定了(轻量级锁)，这个时候就会执行到 else 逻辑中：
+所谓膨胀，就是根据当前锁对象，生成一个 ObjectMonitor 对象，这个对象中保存了 sychronized 阻塞的队列，以及实现了不同的队列调度策略。
+
+当出现多个线程同时竞争锁时，会进入到synchronizer.cpp#slow_enter方法(原因与代码见上文),膨胀过程在inflate中完成：
 
 ```cpp
-if (mark->has_locker() &&
-             THREAD->is_lock_owned((address)mark->locker())) {
-    assert(lock != mark->locker(), "must not re-lock the same lock");
-    assert(lock != (BasicLock*)obj->mark(), "don't relock with same BasicLock");
-    lock->set_displaced_header(NULL);
-    return;
+ObjectMonitor * ATTR ObjectSynchronizer::inflate (Thread * Self, oop object) {
+  ...
+
+  for (;;) {
+      const markOop mark = object->mark() ;
+      assert (!mark->has_bias_pattern(), "invariant") ;
+
+      // mark是以下状态中的一种：
+      // *  Inflated（重量级锁状态）     - 直接返回
+      // *  Stack-locked（轻量级锁状态） - 膨胀
+      // *  INFLATING（膨胀中）    - 忙等待直到膨胀完成
+      // *  Neutral（无锁状态）      - 膨胀
+      // *  BIASED（偏向锁）       - 非法状态，在这里不会出现
+
+      // CASE: inflated
+      if (mark->has_monitor()) {
+          // 已经是重量级锁状态了，直接返回
+          ObjectMonitor * inf = mark->monitor() ;
+          ...
+          return inf ;
+      }
+
+      // CASE: inflation in progress
+      if (mark == markOopDesc::INFLATING()) {
+         // 正在膨胀中，说明另一个线程正在进行锁膨胀，continue重试
+         TEVENT (Inflate: spin while INFLATING) ;
+         // 在该方法中会进行spin/yield/park等操作完成自旋动作 
+         ReadStableMark(object) ;
+         continue ;
+      }
+
+      if (mark->has_locker()) {
+          // 当前轻量级锁状态，先分配一个ObjectMonitor对象，并初始化值
+          ObjectMonitor * m = omAlloc (Self) ;
+
+          m->Recycle();
+          m->_Responsible  = NULL ;
+          m->OwnerIsThread = 0 ;
+          m->_recursions   = 0 ;
+          m->_SpinDuration = ObjectMonitor::Knob_SpinLimit ;   // Consider: maintain by type/class
+          // 将锁对象的mark word设置为INFLATING (0)状态 
+          markOop cmp = (markOop) Atomic::cmpxchg_ptr (markOopDesc::INFLATING(), object->mark_addr(), mark) ;
+          if (cmp != mark) {
+             omRelease (Self, m, true) ;
+             continue ;       // Interference -- just retry
+          }
+
+          // 栈中的displaced mark word
+          markOop dmw = mark->displaced_mark_helper() ;
+          assert (dmw->is_neutral(), "invariant") ;
+
+          // 设置monitor的字段
+          m->set_header(dmw) ;
+          // owner为Lock Record
+          m->set_owner(mark->locker());
+          m->set_object(object);
+          ...
+          // 将锁对象头设置为重量级锁状态
+          object->release_set_mark(markOopDesc::encode(m));
+
+         ...
+          return m ;
+      }
+
+      // CASE: neutral
+
+      // 分配以及初始化ObjectMonitor对象
+      ObjectMonitor * m = omAlloc (Self) ;
+      // prepare m for installation - set monitor to initial state
+      m->Recycle();
+      m->set_header(mark);
+      // owner为NULL
+      m->set_owner(NULL);
+      m->set_object(object);
+      m->OwnerIsThread = 1 ;
+      m->_recursions   = 0 ;
+      m->_Responsible  = NULL ;
+      m->_SpinDuration = ObjectMonitor::Knob_SpinLimit ;       // consider: keep metastats by type/class
+      // 用CAS替换对象头的mark word为重量级锁状态
+      if (Atomic::cmpxchg_ptr (markOopDesc::encode(m), object->mark_addr(), mark) != mark) {
+          // 不成功说明有另外一个线程在执行inflate，释放monitor对象
+          m->set_object (NULL) ;
+          m->set_owner  (NULL) ;
+          m->OwnerIsThread = 0 ;
+          m->Recycle() ;
+          omRelease (Self, m, true) ;
+          m = NULL ;
+          continue ;
+          // interference - the markword changed - just retry.
+          // The state-transitions are one-way, so there's no chance of
+          // live-lock -- "Inflated" is an absorbing state.
+      }
+
+      ...
+      return m ;
+  }
 }
 ```
 
-如果发现当前对象已经锁定，需要判断下是不是当前线程自己锁定了，因为在 synchronized 中可能再一次 synchronized，这种情况下就直接返回即可。
+inflate中是一个for循环，主要是为了处理多线程同时调用inflate的情况。然后会根据锁对象的状态进行不同的处理：
 
-如果上面的两个判断都失败了，也就是对象被锁定，并且锁定线程不是当前线程，这个时候需要执行上面 OpenJDK wiki 中的 inflate 膨胀逻辑。所谓膨胀，就是根据当前锁对象，生成一个 ObjectMonitor 对象，这个对象中保存了 sychronized 阻塞的队列，以及实现了不同的队列调度策略。
+1.已经是重量级状态，说明膨胀已经完成，直接返回
+
+2.如果是轻量级锁则需要进行膨胀操作
+
+3.如果是膨胀中状态，则进行忙等待
+
+4.如果是无锁状态则需要进行膨胀操作
+
+其中轻量级锁和无锁状态需要进行膨胀操作，轻量级锁膨胀流程如下：
+
+1.调用omAlloc分配一个ObjectMonitor对象(以下简称monitor)，在omAlloc方法中会先从线程私有的monitor集合omFreeList中分配对象，如果omFreeList中已经没有monitor对象，则从JVM全局的gFreeList中分配一批monitor到omFreeList中。
+
+2.初始化monitor对象
+
+3.将状态设置为膨胀中（INFLATING）状态
+
+4.设置monitor的header字段为displaced mark word，owner字段为Lock Record，obj字段为锁对象
+
+5.设置锁对象头的mark word为重量级锁状态，指向第一步分配的monitor对象
+
+无锁状态下的膨胀流程如下：
+
+1.调用omAlloc分配一个ObjectMonitor对象(以下简称monitor)
+
+2.初始化monitor对象
+
+3.设置monitor的header字段为 mark word，owner字段为null，obj字段为锁对象
+
+4.设置锁对象头的mark word为重量级锁状态，指向第一步分配的monitor对象
+
+至于为什么轻量级锁需要一个膨胀中（INFLATING）状态，代码中的注释是：
+
+```cpp
+// Why do we CAS a 0 into the mark-word instead of just CASing the
+// mark-word from the stack-locked value directly to the new inflated state?
+// Consider what happens when a thread unlocks a stack-locked object.
+// It attempts to use CAS to swing the displaced header value from the
+// on-stack basiclock back into the object header.  Recall also that the
+// header value (hashcode, etc) can reside in (a) the object header, or
+// (b) a displaced header associated with the stack-lock, or (c) a displaced
+// header in an objectMonitor.  The inflate() routine must copy the header
+// value from the basiclock on the owner's stack to the objectMonitor, all
+// the while preserving the hashCode stability invariants.  If the owner
+// decides to release the lock while the value is 0, the unlock will fail
+// and control will eventually pass from slow_exit() to inflate.  The owner
+// will then spin, waiting for the 0 value to disappear.   Put another way,
+// the 0 causes the owner to stall if the owner happens to try to
+// drop the lock (restoring the header from the basiclock to the object)
+// while inflation is in-progress.  This protocol avoids races that might
+// would otherwise permit hashCode values to change or "flicker" for an object.
+// Critically, while object->mark is 0 mark->displaced_mark_helper() is stable.
+// 0 serves as a "BUSY" inflate-in-progress indicator.
+```
+
+我没太看懂，有知道的同学可以指点下~
+
+膨胀完成之后，会调用enter方法获得锁
+
+```cpp
+void ATTR ObjectMonitor::enter(TRAPS) {
+
+  Thread * const Self = THREAD ;
+  void * cur ;
+  // owner为null代表无锁状态，如果能CAS设置成功，则当前线程直接获得锁
+  cur = Atomic::cmpxchg_ptr (Self, &_owner, NULL) ;
+  if (cur == NULL) {
+     ...
+     return ;
+  }
+  // 如果是重入的情况
+  if (cur == Self) {
+     // TODO-FIXME: check for integer overflow!  BUGID 6557169.
+     _recursions ++ ;
+     return ;
+  }
+  // 当前线程是之前持有轻量级锁的线程。由轻量级锁膨胀且第一次调用enter方法，那cur是指向Lock Record的指针
+  if (Self->is_lock_owned ((address)cur)) {
+    assert (_recursions == 0, "internal state error");
+    // 重入计数重置为1
+    _recursions = 1 ;
+    // 设置owner字段为当前线程（之前owner是指向Lock Record的指针）
+    _owner = Self ;
+    OwnerIsThread = 1 ;
+    return ;
+  }
+
+  ...
+
+  // 在调用系统的同步操作之前，先尝试自旋获得锁
+  if (Knob_SpinEarly && TrySpin (Self) > 0) {
+     ...
+     //自旋的过程中获得了锁，则直接返回
+     Self->_Stalled = 0 ;
+     return ;
+  }
+
+  ...
+
+  {
+    ...
+
+    for (;;) {
+      jt->set_suspend_equivalent();
+      // 在该方法中调用系统同步操作
+      EnterI (THREAD) ;
+      ...
+    }
+    Self->set_current_pending_monitor(NULL);
+
+  }
+
+  ...
+
+}
+```
+
+如果当前是无锁状态、锁重入、当前线程是之前持有轻量级锁的线程则进行简单操作后返回。
+先自旋尝试获得锁，这样做的目的是为了减少执行操作系统同步操作带来的开销
+调用EnterI方法获得锁或阻塞
+EnterI方法比较长，在看之前，我们先阐述下其大致原理：
+
+一个ObjectMonitor对象包括这么几个关键字段：cxq（下图中的ContentionList），EntryList ，WaitSet，owner。
+
+其中cxq ，EntryList ，WaitSet都是由ObjectWaiter的链表结构，owner指向持有锁的线程。
+
 ObjectMonitor 的构造函数如下：
 
 ```cpp
