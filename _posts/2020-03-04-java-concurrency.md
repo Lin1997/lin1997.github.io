@@ -941,8 +941,33 @@ void InterpreterMacroAssembler::lock_object(Register lock_reg) {
       // slow_case 和 done 也被传入，这样在biased_locking_enter()中，就可以根据情况跳到这两处了。
       biased_locking_enter(lock_reg, obj_reg, swap_reg, tmp_reg, false, done, &slow_case);
     }
-    ......
-    ......
+
+    // Load immediate 1 into swap_reg %rax,
+    movptr(swap_reg, (int32_t)1);
+    // Load (object->mark() | 1) into swap_reg %rax,
+    orptr(swap_reg, Address(obj_reg, 0));
+    // Save (object->mark() | 1) into BasicLock's displaced header
+    movptr(Address(lock_reg, mark_offset), swap_reg);
+    ...
+    cmpxchgptr(lock_reg, Address(obj_reg, 0));
+    jcc(Assembler::zero, done);
+
+    // Test if the oopMark is an obvious stack pointer, i.e.,
+    //  1) (mark & 3) == 0, and
+    //  2) rsp <= mark < mark + os::pagesize()
+    //
+    // These 3 tests can be done by evaluating the following
+    // expression: ((mark - rsp) & (3 - os::vm_page_size())),
+    // assuming both stack pointer and pagesize have their
+    // least significant 2 bits clear.
+    // NOTE: the oopMark is in swap_reg %rax, as the result of cmpxchg
+    subptr(swap_reg, rsp);
+    andptr(swap_reg, 3 - os::vm_page_size());
+
+    // Save the test result, for recursive case, the result is zero
+    movptr(Address(lock_reg, mark_offset), swap_reg);
+
+    jcc(Assembler::zero, done);
 
     // 如果使用重量级锁，直接跳到这，需要进入InterpreterRuntime::monitorenter()中去获取锁。
     bind(slow_case);
