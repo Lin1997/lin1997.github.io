@@ -28,7 +28,6 @@ BeanPostProcessor使所有Bean后置处理器的子接口，包含两个方法�
 1. 不需代理的类：Infrastructure类（比如加了`@Advice`、`@Pointcut`等注解的类，这些类也不需要被代理）或者shouldSkip的类，加入黑名单`this.advisedBeans.put(cacheKey, Boolean.FALSE)`。然后返回null表示继续执行Bean的正常创建流程。注意在后面调用`postProcessAfterInitialization`时(后文有提到)，这些处于`advisedBeans`不需要代理的类将直接返回目标对象而不创建代理对象。
 2. 已经被代理，则返回一个代理对象的代理对象，由于返回值不为null，因此不再继续执行Bean的正常创建流程。
 
-
 ## 2.SmartInstantiationAwareBeanPostProcessor
 
 `SmartInstantiationAwareBeanPostProcessor`继承了`InstantiationAwareBeanPostProcessor`
