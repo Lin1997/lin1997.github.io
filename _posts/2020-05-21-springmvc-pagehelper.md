@@ -10,7 +10,7 @@ tags:
 
 ## 引入pagehelper依赖
 
-```maven
+```xml
 <dependency>
     <groupId>com.github.pagehelper</groupId>
     <artifactId>pagehelper</artifactId>
@@ -25,10 +25,9 @@ tags:
     <property name="plugins">
         <array>
             <bean class="com.github.pagehelper.PageInterceptor">
-                <!-- 这里的几个配置主要演示如何使用，如果不理解，一定要去掉下面的配置 -->
                 <property name="properties">
                     <value>
-                        <!-- 在这里设定属性，具体见:
+                        <!-- 在这里配置主属性，具体见:
                         https://github.com/pagehelper/Mybatis-PageHelper/blob/master/wikis/zh/HowToUse.md -->
                     </value>
                 </property>
@@ -42,10 +41,10 @@ tags:
 
 ```java
 @RequestMapping("/")
-public ModelAndView getList(ModelMap map,@RequestParam(required = false, defaultValue = "1") int pageNum,
+public String index(Model model,@RequestParam(required = false, defaultValue = "1") int pageNum,
                             @RequestParam(required = false, defaultValue = "10") int pageSize) {
     List<Country> countryList = countryService.selectByCountry(pageNum, pageSize);
-    map.addAttribute("pageInfo",new PageInfo<Country>(countryList));
+    model.addAttribute("pageInfo",new PageInfo<Country>(countryList));    //  封装分页实体，保存至model
     return "/index";
 }
 ```
@@ -58,10 +57,7 @@ public List<Country> selectByCountry(int pageNum, int pageSize) {
     PageHelper.startPage(pageNum, pageSize);
     //  查询数据库
     List<Country> countryList = countryMapper.selectByExample(example);
-    //  获取分页查询后的数据
-    PageInfo<Country> countryPageInfo = new PageInfo<>(countryList);
-    //  封装需要返回的分页实体
-    return countryPageInfo;
+    return countryList;
 }
 ```
 
@@ -84,6 +80,7 @@ public List<Country> selectByCountry(int pageNum, int pageSize) {
     </tbody>
 </table>
 
+<!-- 分页控件显示 -->
 <div style="float: right;">
     <div style="float: right;">
         当前${pageInfo.pageNum}页,共${pageInfo.pages}页,总共${pageInfo.total}条记录
