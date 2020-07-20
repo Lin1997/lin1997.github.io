@@ -148,19 +148,38 @@ Program arguments: 这里我们选择`-version`，简单打印一下`java`版本
 # Before luanch：这个下面的Build可去可不去，去掉就不会每次执行都去Build，节省时间，但其实OpenJDK增量编译的方式，每次Build都很快，所以就看个人选择了。
 ```
 
-### 开始调试
+### 配置GDB
 
-`Ubuntu`下默认使用的调试器是`gdb`，调试的时候可能会发现`gdb`报错：`Signal: SIGSEGV (Segmentation fault)`。解决办法是，在`compile_commands.json`同一目录或用户目录下创建`.gdbinit`，内容如下：
+由于HotSpot JVM内部使用了SEGV等信号来实现一些功能（如`NullPointerException`、`safepoints`等），所以调试过程中，`GDB`可能会误报`Signal: SIGSEGV (Segmentation fault)`. 解决办法是，在用户目录下创建`.gdbinit`，让`GDB`捕获`SEGV`等信号：
 
 ```bash
-handle SIGSEGV pass noprint nostop
-handle SIGBUS pass noprint nostop
+vi ~/.gdbinit
 ```
 
-在`${source_root}/src/java.base/share/native/libjli/java.c`的`401`行打断点，点击`Debug`即可开始调试.
+将以下内容副直到文件中并保存：
+
+```bash
+handle SIGSEGV nostop noprint pass
+handle SIGBUS nostop noprint pass
+handle SIGFPE nostop noprint pass
+handle SIGPIPE nostop noprint pass
+handle SIGILL nostop noprint pass
+```
+
+### 开始调试
+
+完成以上配置之后，一个可修改、编译、调试的HotSpot工程就完全建立起来了。HotSpot虚拟机启动器的执行入口是`${source_root}/src/java.base/share/native/libjli/java.c`的`JavaMain()`方法，读者可以设置断点后点击`Debug`可开始调试.
+读者在调试Java代码执行时，如果要跟踪具体Java代码在虚拟机中是如何执行的，一开始可能会觉得有些无处入手，因为目前HotSpot在主流的操作系统上，都采用模板解释器来执行字节码，它与即时编译器一样，最终执行的汇编代码都是运行期间产生的，无法直接设置断点，所以HotSpot增加了以下参数来方便开发人员调试解释器：
+
+```bash
+-XX:+TraceBytecodes -XX:StopInterpreterAt=<n>
+```
+
+这组参数的作用是当遇到序号为的字节码指令时，便会中断程序执行，进入断点调试。调试 解释器部分代码时，把这两个参数加到java命令的参数后面即可。
 
 ### 参考文章
 
 - [Tips & Tricks: Develop OpenJDK in CLion with Pleasure](https://blog.jetbrains.com/clion/2020/03/openjdk-with-clion/)
 - [OpenJDK 编译调试指南(Ubuntu 16.04 + MacOS 10.15)](https://juejin.im/post/5ef8c6a86fb9a07e7654ef9d)
 - [JVM-在MacOS系统上使用CLion编译并调试OpenJDK12](https://www.howieli.cn/posts/macos-clion-build-debug-openjdk12.html)
+- [深入理解Java虚拟机：JVM高级特性与最佳实践(第3版)](https://item.jd.com/12607299.html)
