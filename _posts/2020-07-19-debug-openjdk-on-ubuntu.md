@@ -99,6 +99,26 @@ ls -l
 
 ### 导入项目至CLion
 
+#### 优化CLion索引速度
+
+提高`Inotify`监视文件句柄上限，以优化CLion索引速度：
+
+1. 在`/etc/sysctl.conf`中或 `/etc/sysctl.d/`目录下新建一个`*.conf`文件，添加以下内容：
+
+   ```bash
+   fs.inotify.max_user_watches = 524288
+   ```
+
+2. 应用更改：
+
+   ```bash
+   sudo sysctl -p --system
+   ```
+
+3. 重新启动CLion
+
+#### 导入项目
+
 打开`CLion`，选择`Open Or Import`，选择上文生成的`build/配置名称/compile_commands.json`文件，弹出框选择`Open as Project`，等待文件索引完成.
 
 接着，修改项目的根目录，通过`Tools -> Compilation Database -> Change Project Root`功能，选中你的源码目录.
@@ -137,7 +157,8 @@ ls -l
 
 ```yaml
 # Executable 和 Program arguments 可以根据需要调试的信息自行选择
-# NameL：Configure 的名称
+
+# Name：Configure 的名称
 Name: linux-x86_64-normal-server-fastdebug
 # Target：选择上一步创建的 “Custom Build Target”
 Target: linux-x86_64-normal-server-fastdebug
