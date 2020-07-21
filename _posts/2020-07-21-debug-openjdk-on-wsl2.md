@@ -125,4 +125,4 @@ export GDK_SCALE=2
 
 ## 安装CLion以及编译、调试OpenJDK
 
-这部分内容与在原生Ubuntu环境下类似，请参考[这篇文章](./2020-07-19-debug-openjdk-on-ubuntu.md).
+这部分内容与在原生Ubuntu环境下类似，请参考[在Ubuntu中编译和调试OpenJDK](https://lin1997.github.io/2020/07/19/debug-openjdk-on-ubuntu.html).
