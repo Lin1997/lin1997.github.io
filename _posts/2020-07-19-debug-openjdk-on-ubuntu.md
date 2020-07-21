@@ -138,7 +138,7 @@ ls -l
   # Program 和 Arguments 共同构成了所要执行的命令 "make all"
   Name: make
   Program: make
-  Arguments: all
+  Arguments:
   Working directory: {项目的根目录}
   
   # 第二个配置如下，用来清理构建输出
@@ -159,9 +159,9 @@ ls -l
 # Executable 和 Program arguments 可以根据需要调试的信息自行选择
 
 # Name：Configure 的名称
-Name: linux-x86_64-normal-server-fastdebug
+Name: OpenJDK
 # Target：选择上一步创建的 “Custom Build Target”
-Target: linux-x86_64-normal-server-fastdebug
+Target: {上一步创建的 “Custom Build Target”}
 # Executable：程序执行入口，也就是需要调试的程序
 Executable: 这里我们调试`java`，选择`{source_root}/build/{build_name}/jdk/bin/java`。
 # Program arguments: 与 “Executable” 配合使用，指定其参数

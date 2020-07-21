@@ -95,6 +95,24 @@ export DISPLAY=$(cat /etc/resolv.conf | grep nameserver | awk '{print $2}'):0.0
 export LIBGL_ALWAYS_INDIRECT=1
 ```
 
+### 修复/mnt/下挂载的文件系统的权限问题
+
+把下面automount的选项添加到`/etc/wsl.conf`文件中：
+
+```bash
+[automount]
+enabled = true
+root = /mnt/
+options = "metadata,umask=22,fmask=11"
+mountFsTab = false
+```
+
+然后，在`Powershell`中运行以下命令重启WSL：
+
+```powershell
+wsl -t
+```
+
 ## 在Windows中安装X Window server
 
 可以使用收费的**X410**、或者免费的**VcXsrv**等，前者对HiDPI似乎有优化。后文以VcXsrv为例子。
@@ -123,6 +141,22 @@ export LIBGL_ALWAYS_INDIRECT=1
 export GDK_SCALE=2
 ```
 
-## 安装CLion以及编译、调试OpenJDK
+## 安装CLion
+
+到[CLion官网](https://www.jetbrains.com/clion/download/#section=linux)下载`*.tar.gz`安装包，然后解压至当前目录：
+
+```bash
+tar -xzf CLion-*.tar.gz
+```
+
+为了方便使用命令启动，为解压后的`bin/clion.sh`启动脚本添加软连接（注意将`bin/clion.sh`替换为自己的实际解压目录）：
+
+```bash
+sudo ln -s bin/clion.sh /usr/local/bin/clion
+```
+
+然后，运行命令`clion`即可启动Clion.
+
+## 编译和调试OpenJDK
 
 这部分内容与在原生Ubuntu环境下类似，请参考[在Ubuntu中编译和调试OpenJDK](https://lin1997.github.io/2020/07/19/debug-openjdk-on-ubuntu.html).
