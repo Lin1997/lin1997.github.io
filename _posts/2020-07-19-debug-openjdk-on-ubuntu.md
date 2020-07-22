@@ -123,6 +123,11 @@ ls -l
 
 接着，修改项目的根目录，通过`Tools -> Compilation Database -> Change Project Root`功能，选中你的源码目录.
 
+> 为了减少CLion索引文件数，提高CLion效率，建议将非必要的文件夹排除：`Mark Directory as` -> `Excluded`. 大部分情况下，我们只需要索引以下文件夹下的源码：
+>
+> - src/hotspot
+> - src/java.base
+
 ### 配置调试选项
 
 #### 创建自定义`Build Target`
