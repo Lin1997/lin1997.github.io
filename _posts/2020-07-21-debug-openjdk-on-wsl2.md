@@ -81,10 +81,10 @@ sudo apt install x11-apps
 
 ### 配置环境变量
 
-编辑`~/bash_login`文件：
+编辑`~/.bashrc`文件：
 
 ```bash
-vi ~/.bash_login
+vi ~/.bashrc
 ```
 
 添加内容如下：
@@ -110,7 +110,7 @@ mountFsTab = false
 然后，在`Powershell`中运行以下命令重启WSL：
 
 ```powershell
-wsl -t
+wsl --shutdown
 ```
 
 ## 在Windows中安装X Window server
@@ -131,15 +131,63 @@ wsl -t
 
 最后点击Save configuration保存配置文件，以后就可以通过这个配置文件启动服务。如果有防火墙安全提示，请授权通过。
 
-## 解决高分辨率屏幕上字体模糊
+> **解决高分辨率屏幕上VcXsrv字体模糊**
+> `VcXsrv` 应用图标上右键，选择`属性` -> `兼容性` -> `更改高DPI设置` -> `代替高DPI缩放行为` -> `应用程序`，点击确认。
+> 然后再到 WSL 里将以下代码加入 `.bashrc` 或 `.zshrc`:
+> 
+> ```bash
+> export GDK_SCALE=2
+> ```
 
-`VcXsrv` 应用图标上右键，选择`属性` -> `兼容性` -> `更改高DPI设置` -> `代替高DPI缩放行为` -> `应用程序`，点击确认。
+## 中文配置
 
-然后再到 WSL 里将以下代码加入 `.bashrc` 或 `.zshrc`:
+### 安装中文支持包
 
 ```bash
-export GDK_SCALE=2
+sudo apt install language-pack-zh-hans
 ```
+
+### 安装中文字体
+
+```bash
+sudo apt install fonts-droid-fallback ttf-wqy-zenhei ttf-wqy-microhei fonts-arphic-ukai fonts-arphic-uming
+```
+
+然后在Powershell中输入`wsl --shutdown`重启WSL.
+
+### 安装输入法
+
+安装fcitx与google 拼音：
+
+```bash
+sudo apt install fcitx fcitx-googlepinyin dbus-x11
+```
+
+编辑`~/bash_login`文件：
+
+```bash
+vi ~/.bashrc
+```
+
+添加内容如下:
+
+```bash
+export XMODIFIERS=@im=fcitx
+export GTK_IM_MODULE=fcitx
+export QT_IM_MODULE=fcitx
+
+if [ $(ps -ax | grep dbus-daemon | wc -l) -eq 1 ]; then
+  eval `dbus-launch fcitx > /dev/null 2>&1`
+fi
+```
+
+确保Windows下`X Window server`已启动，然后运行：
+
+```bash
+fcitx-configtool
+```
+
+会出现如图的界面，点击左下角的`+`，搜索安装好的google输入法并添加。
 
 ## 安装CLion
 
