@@ -39,7 +39,7 @@ sudo apt install openjdk-11-jdk
 
 可以直接访问准备下载的JDK版本的仓库页面（譬如本例中OpenJDK 11的页面为[https://hg.openjdk.java.net/jdk-updates/jdk11u/](https://hg.openjdk.java.net/jdk-updates/jdk11u/)），然后点击左边菜单中的“Browse”，再点击左边的“zip”链接即可下载当前版本打包好的源码，到本地直接解压即可。
 
-也可以从Github第三方Repositories中获取（[https://github.com/unofficial-openjdk/openjdk](https://github.com/unofficial-openjdk/openjdk)、[https://github.com/AdoptOpenJDK/](https://github.com/AdoptOpenJDK/)），点击Clone按钮下的**Download ZIP**按钮下载打包好的源码，到本地直接解压即可。
+也可以从Github的镜像Repositories中获取（[https://github.com/openjdk](https://github.com/openjdk)），进入所需版本的JDK的页面，点击Clone按钮下的**Download ZIP**按钮下载打包好的源码，到本地直接解压即可。
 
 ### 进行编译
 
@@ -49,16 +49,16 @@ sudo apt install openjdk-11-jdk
 cd ~/openjdk
 ```
 
-要想带着调试、定制化的目的去编译，就要使用OpenJDK提供的编译参数，可以使用`bash configure --help`查看. 本例要编译FastDebug版、仅含Server模式的HotSpot虚拟机，对应命令如下：
+要想带着调试、定制化的目的去编译，就要使用OpenJDK提供的编译参数，可以使用`bash configure --help`查看. 本例要编译SlowDebug版、仅含Server模式的HotSpot虚拟机，对应命令如下：
 
 ```bash
-bash configure --enable-debug --with-jvm-variants=server
+bash configure --with-debug-level=slowdebug --with-jvm-variants=server
 ```
 
 > 对于版本较低的OpenJDK，编译过程中可能会出现了源码**deprecated**的错误，这是因为>=2.24版本的glibc中 ，readdir_r等方法被标记为deprecated。若读者也出现了该问题，请在`configure`命令加上`--disable-warnings-as-errors`参数，如下：
 >
 > ```bash
-> bash configure --enable-debug --with-jvm-variants=server --disable-warnings-as-errors
+> bash configure --with-debug-level=slowdebug --with-jvm-variants=server --disable-warnings-as-errors
 > ```
 >
 > 此外，若要重新编译，请先执行`make clean`
@@ -72,7 +72,7 @@ make
 生成的JDK在`build/配置名称/jdk`中，测试一下，如：
 
 ```bash
-cd build/linux-x86_64-normal-server-fastdebug/jdk/bin
+cd build/linux-x86_64-normal-server-slowdebug/jdk/bin
 ./java -version
 ```
 
@@ -93,7 +93,7 @@ make compile-commands
 然后检查一下`build/配置名称/`下是否生成了`compile_commands.json`.
 
 ```bash
-cd build/linux-x86_64-normal-server-fastdebug
+cd build/linux-x86_64-normal-server-slowdebug
 ls -l
 ```
 
@@ -132,7 +132,7 @@ ls -l
 
 #### 创建自定义`Build Target`
 
-点击`File`菜单栏，`Settings -> Build -> Execution -> Deployment -> Custom Build Targets`，点击`+`新建一个`Target`，配置如下：
+点击`File`菜单栏，`Settings -> Build, Execution, Deployment -> Custom Build Targets`，点击`+`新建一个`Target`，配置如下：
 
 - `Name`：`Target`的名字，之后在创建`Run/Debug`配置的时候会看到这个名字
 
@@ -140,7 +140,7 @@ ls -l
 
   ```yaml
   # 第一个配置如下，用来指定构建指令
-  # Program 和 Arguments 共同构成了所要执行的命令 "make all"
+  # Program 和 Arguments 共同构成了所要执行的命令 "make"
   Name: make
   Program: make
   Arguments:
