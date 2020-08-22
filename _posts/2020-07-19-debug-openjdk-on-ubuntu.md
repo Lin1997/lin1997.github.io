@@ -6,9 +6,7 @@ tags:
     - CLion
 ---
 
-## 配置环境
-
-### 构建编译环境
+## 构建编译环境
 
 安装GCC编译器：
 
@@ -35,13 +33,13 @@ sudo apt install build-essential
 sudo apt install openjdk-11-jdk
 ```
 
-### 获取源码
+## 获取源码
 
 可以直接访问准备下载的JDK版本的仓库页面（譬如本例中OpenJDK 11的页面为[https://hg.openjdk.java.net/jdk-updates/jdk11u/](https://hg.openjdk.java.net/jdk-updates/jdk11u/)），然后点击左边菜单中的“Browse”，再点击左边的“zip”链接即可下载当前版本打包好的源码，到本地直接解压即可。
 
 也可以从Github的镜像Repositories中获取（[https://github.com/openjdk](https://github.com/openjdk)），进入所需版本的JDK的页面，点击Clone按钮下的**Download ZIP**按钮下载打包好的源码，到本地直接解压即可。
 
-### 进行编译
+## 进行编译
 
 首先进入解压后的源代码目录，本例解压到的目录为`~/openjdk/`：
 
@@ -76,7 +74,7 @@ cd build/linux-x86_64-normal-server-slowdebug/jdk/bin
 ./java -version
 ```
 
-### 生成Compilation Database
+## 生成Compilation Database
 
 `CLion`可以通过`Compilation Database`来导入项目. 在`OpenJDK 11u`及之后版本中，`OpenJDK`官方提供了对于`IDE`的支持，可以使用`make compile-commands`命令生成`Compilation Database`：
 
@@ -97,9 +95,9 @@ cd build/linux-x86_64-normal-server-slowdebug
 ls -l
 ```
 
-### 导入项目至CLion
+## 导入项目至CLion
 
-#### 优化CLion索引速度
+### 优化CLion索引速度
 
 提高`Inotify`监视文件句柄上限，以优化CLion索引速度：
 
@@ -117,7 +115,7 @@ ls -l
 
 3. 重新启动CLion
 
-#### 导入项目
+### 导入项目
 
 打开`CLion`，选择`Open Or Import`，选择上文生成的`build/配置名称/compile_commands.json`文件，弹出框选择`Open as Project`，等待文件索引完成.
 
@@ -130,7 +128,7 @@ ls -l
 
 ### 配置调试选项
 
-#### 创建自定义`Build Target`
+#### 创建自定义Build Target
 
 点击`File`菜单栏，`Settings -> Build, Execution, Deployment -> Custom Build Targets`，点击`+`新建一个`Target`，配置如下：
 
@@ -156,7 +154,7 @@ ls -l
 
 - `ToolChain`选择`Default`；`Build`选择`make`（上面创建的第一个`External Tool`）；`Clean`选择`make clean`（上面创建的第二个`External Tool`）
 
-#### 创建自定义的`Run/Debug configuration`
+#### 创建自定义的Run/Debug configuration
 
 点击`Run`菜单栏，`Edit Configurations`， 点击`+`，选择`Custom Build Application`，配置如下：
 
@@ -203,13 +201,13 @@ handle SIGILL nostop noprint pass
 
 这组参数的作用是当遇到序号为的字节码指令时，便会中断程序执行，进入断点调试。调试 解释器部分代码时，把这两个参数加到java命令的参数后面即可。
 
-### 配置IDEA
+## 配置IDEA
 
-#### 为项目的绑定JDK源码路径
+### 为项目的绑定JDK源码路径
 
 打开IDEA，新建一个项目。然后选择`File -> Project Structure`，选到`SDKs`选项，新添加上自己刚刚编译生成的JDK，`JDK home path`为`${source_root}/build/配置名称/jdk`. 然后在`Sourcepath`下移除原本的源码路径（如果有），并添加为前面的源代码，如`${source_root}/src/java.base/share/classes`等. 这样以来，我们就可以在IDEA中编辑JDK的JAVA代码，添加自己的注释了。
 
-#### 重新编译JDK的JAVA代码
+### 重新编译JDK的JAVA代码
 
 在添加中文注释后，再编译JDK时会报错：
 
@@ -235,11 +233,11 @@ handle SIGILL nostop noprint pass
 make java
 ```
 
-#### 使用IDEA的Step Into跟踪调试源码
+### 使用IDEA的Step Into跟踪调试源码
 
 我们发现，在IDEA调试JDK源码时，无法使用`Step Into`(F7)跟进JDK中的相关函数，这是因为IDEA默认设置不步入这些内置的源码。可以在`File -> Settings -> Build, Execution, Deployment -> Debugger -> Stepping`中，取消勾选`Do not step into the classes`来取消限制。
 
-### 参考文章
+## 参考文章
 
 - [Tips & Tricks: Develop OpenJDK in CLion with Pleasure](https://blog.jetbrains.com/clion/2020/03/openjdk-with-clion/)
 - [OpenJDK 编译调试指南(Ubuntu 16.04 + MacOS 10.15)](https://juejin.im/post/5ef8c6a86fb9a07e7654ef9d)
