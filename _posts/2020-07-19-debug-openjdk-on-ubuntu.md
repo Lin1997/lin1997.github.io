@@ -203,6 +203,42 @@ handle SIGILL nostop noprint pass
 
 这组参数的作用是当遇到序号为的字节码指令时，便会中断程序执行，进入断点调试。调试 解释器部分代码时，把这两个参数加到java命令的参数后面即可。
 
+### 配置IDEA
+
+#### 为项目的绑定JDK源码路径
+
+打开IDEA，新建一个项目。然后选择`File -> Project Structure`，选到`SDKs`选项，新添加上自己刚刚编译生成的JDK，`JDK home path`为`${source_root}/build/配置名称/jdk`. 然后在`Sourcepath`下移除原本的源码路径（如果有），并添加为前面的源代码，如`${source_root}/src/java.base/share/classes`等. 这样以来，我们就可以在IDEA中编辑JDK的JAVA代码，添加自己的注释了。
+
+#### 重新编译JDK的JAVA代码
+
+在添加中文注释后，再编译JDK时会报错：
+
+> 错误: 编码 ascii 的不可映射字符
+
+我们可以在`${source_root}/make/common/SetupJavaCompilers.gmk`中，修改两处编码方式的设置，替换原内容：
+
+```bash
+-encoding ascii
+```
+
+为：
+
+```bash
+-encoding utf-8
+```
+
+这样编译就不会报错了。
+
+而且，如果我们只修改了JAVA代码，无需使用`make`命令重新编译整个OpenJDK，而只需要使用以下命令仅编译JAVA模块：
+
+```bash
+make java
+```
+
+#### 使用IDEA的Step Into跟踪调试源码
+
+我们发现，在IDEA调试JDK源码时，无法使用`Step Into`(F7)跟进JDK中的相关函数，这是因为IDEA默认设置不步入这些内置的源码。可以在`File -> Settings -> Build, Execution, Deployment -> Debugger -> Stepping`中，取消勾选`Do not step into the classes`来取消限制。
+
 ### 参考文章
 
 - [Tips & Tricks: Develop OpenJDK in CLion with Pleasure](https://blog.jetbrains.com/clion/2020/03/openjdk-with-clion/)
