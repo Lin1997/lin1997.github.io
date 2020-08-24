@@ -47,19 +47,19 @@ sudo apt install openjdk-11-jdk
 cd ~/openjdk
 ```
 
-要想带着调试、定制化的目的去编译，就要使用OpenJDK提供的编译参数，可以使用`bash configure --help`查看. 本例要编译SlowDebug版、仅含Server模式的HotSpot虚拟机，对应命令如下：
+要想带着调试、定制化的目的去编译，就要使用OpenJDK提供的编译参数，可以使用`bash configure --help`查看. 本例要编译SlowDebug版、仅含Server模式的HotSpot虚拟机，同时我们还可以禁止压缩生成的调试符号信息，方便gdb调试获取当前正在执行的源代码和行号等调试信息. 对应命令如下：
 
 ```bash
-bash configure --with-debug-level=slowdebug --with-jvm-variants=server
+bash configure --with-debug-level=slowdebug --with-jvm-variants=server --disable-zip-debug-info
 ```
 
 > 对于版本较低的OpenJDK，编译过程中可能会出现了源码**deprecated**的错误，这是因为>=2.24版本的glibc中 ，readdir_r等方法被标记为deprecated。若读者也出现了该问题，请在`configure`命令加上`--disable-warnings-as-errors`参数，如下：
 >
 > ```bash
-> bash configure --with-debug-level=slowdebug --with-jvm-variants=server --disable-warnings-as-errors
+> bash configure --with-debug-level=slowdebug --with-jvm-variants=server --disable-zip-debug-info --disable-warnings-as-errors
 > ```
 >
-> 此外，若要重新编译，请先执行`make clean`
+> 此外，若要重新编译，请先执行`make dist-clean`
 
 执行`make`命令进行编译：
 
@@ -180,26 +180,51 @@ Program arguments: 这里我们选择`-version`，简单打印一下`java`版本
 vi ~/.gdbinit
 ```
 
-将以下内容副直到文件中并保存：
+将以下内容追加到文件中并保存：
 
 ```bash
 handle SIGSEGV nostop noprint pass
-handle SIGBUS nostop noprint pass
-handle SIGFPE nostop noprint pass
-handle SIGPIPE nostop noprint pass
-handle SIGILL nostop noprint pass
 ```
 
 ### 开始调试
 
+#### 使用CLion调试C++层面的代码
+
 完成以上配置之后，一个可修改、编译、调试的HotSpot工程就完全建立起来了。HotSpot虚拟机启动器的执行入口是`${source_root}/src/java.base/share/native/libjli/java.c`的`JavaMain()`方法，读者可以设置断点后点击`Debug`可开始调试.
-读者在调试Java代码执行时，如果要跟踪具体Java代码在虚拟机中是如何执行的，一开始可能会觉得有些无处入手，因为目前HotSpot在主流的操作系统上，都采用模板解释器来执行字节码，它与即时编译器一样，最终执行的汇编代码都是运行期间产生的，无法直接设置断点，所以HotSpot增加了以下参数来方便开发人员调试解释器：
+
+#### 使用GDB调试汇编层面的代码
+
+对于汇编级别的调试，我们可以手动使用GDB进行调试。
+
+由于目前HotSpot在主流的操作系统上，都采用模板解释器来执行字节码，它与即时编译器一样，最终执行的汇编代码都是运行期间产生的，无法直接设置断点，所以HotSpot增加了以下参数来方便开发人员调试解释器：
 
 ```bash
 -XX:+TraceBytecodes -XX:StopInterpreterAt=<n>
 ```
 
-这组参数的作用是当遇到序号为的字节码指令时，便会中断程序执行，进入断点调试。调试 解释器部分代码时，把这两个参数加到java命令的参数后面即可。
+这组参数的作用是当遇到程序的第n条字节码指令时，便会中断程序执行，进入断点调试。调试 解释器部分代码时，把这两个参数加到java命令的参数后面即可。
+
+同理，我们可以在GDB中使用上面的参数启动调试Hotspot：
+
+```bash
+gdb --args build/linux-x86_64-normal-server-slowdebug/jdk/bin/java -version -XX:+TraceBytecodes -XX:StopInterpreterAt=<n>
+```
+
+接着，我们通过GDB在`${source_root}/src/hotspot/os/linux/os_linux.cpp`中的`os::breakpoint()`函数上打上断点:
+
+```bash
+b breakpoint
+```
+
+> 为什么要将断点打在这里？
+>
+> 去看`${source_root}/src/hotspot/share/interpreter/templateInterpreterGenerator.cpp`里，函数`TemplateInterpreterGenerator::generate_and_dispatch`中对`stop_interpreter_at()`的调用就知道了.
+
+然后就可以通过GDB中开始运行java程序，开始调试:
+
+```bash
+r
+```
 
 ## 配置IDEA
 
@@ -211,7 +236,7 @@ handle SIGILL nostop noprint pass
 
 在添加中文注释后，再编译JDK时会报错：
 
-> 错误: 编码 ascii 的不可映射字符
+> error: unmappable character (0x??) for encoding ascii
 
 我们可以在`${source_root}/make/common/SetupJavaCompilers.gmk`中，修改两处编码方式的设置，替换原内容：
 
