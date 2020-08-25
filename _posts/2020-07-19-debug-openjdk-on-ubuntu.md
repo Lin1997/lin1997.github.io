@@ -194,6 +194,10 @@ handle SIGSEGV nostop noprint pass
 
 #### 使用GDB调试汇编层面的代码
 
+这里提供两个方法，一个是使用`-XX:StopInterpreterAt=<n>`虚拟机参数来实现中断，缺点是需要找到你所感兴趣的字节码在程序中的序号；第二个方法是直接去寻找记录生成的机器指令的入口(EntryPoint)的表，即`Interpreter::_normal_table`，在对应的字节码入口地址打断点，但是这需要读者对模板解释器有一定了解。
+
+##### 使用虚拟机参数进行中断
+
 对于汇编级别的调试，我们可以手动使用GDB进行调试：
 
 ```bash
@@ -275,6 +279,51 @@ if (StopInterpreterAt > 0)                                     stop_interpreter_
 
 进入真正的字节码逻辑后，我们就可以使用指令级别的`stepi`, `nexti`命令来进行跟踪调试了。（由于汇编代码都是运行期产生的，GDB中没有与源代码的对应符号信息，所以不能用C++源码行级命令`step`以及`next`）
 
+##### 寻找字节码机器指令的入口手动打断点
+
+关于模板解释器相关知识，可以阅读：[JVM之模板解释器](https://zhuanlan.zhihu.com/p/33886967).
+
+还是一样，运行GDB：
+
+```bash
+gdb build/linux-x86_64-normal-server-slowdebug/jdk/bin/java
+start
+break JavaMain
+continue
+```
+
+我们先在`${source_root}/src/hotspot/share/interpreter/templateInterpreter.cpp`的`DispatchTable::set_entry(...)`函数上打条件断点，条件是函数实参`i == <字节码对应十六进制>`，字节码对应的十六进制见：`${source_root}/src/hotspot/share/interpreter/bytecodes.hpp`的`Bytecodes::Code`.
+
+```bash
+break DispatchTable::set_entry if i==<字节码对应十六进制>
+```
+
+然后继续运行
+
+```bash
+continue
+```
+
+命中断点后，查看函数实参`entry`所指向的内存地址
+
+```bash
+print entry
+```
+
+在这个地址上打断点。
+
+```bash
+break *<内存地址>
+```
+
+然后继续运行
+
+```bash
+continue
+```
+
+命中断点后，就跟前一个方法一样可以直接使用指令级别的`stepi`, `nexti`命令来进行跟踪调试了。
+
 ## 配置IDEA
 
 ### 为项目的绑定JDK源码路径
@@ -319,3 +368,4 @@ make java
 - [深入理解Java虚拟机：JVM高级特性与最佳实践(第3版)](https://item.jd.com/12607299.html)
 - [编译JDK源码踩坑纪实](https://juejin.im/post/6850037282893332487)
 - [How to  to debug the HotSpot interpreter](http://mail.openjdk.java.net/pipermail/hotspot-dev/2009-January/000990.html)
+- [JVM之模板解释器](https://zhuanlan.zhihu.com/p/33886967)
