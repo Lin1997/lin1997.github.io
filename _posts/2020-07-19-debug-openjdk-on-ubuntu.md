@@ -194,37 +194,86 @@ handle SIGSEGV nostop noprint pass
 
 #### 使用GDB调试汇编层面的代码
 
-对于汇编级别的调试，我们可以手动使用GDB进行调试。
-
-由于目前HotSpot在主流的操作系统上，都采用模板解释器来执行字节码，它与即时编译器一样，最终执行的汇编代码都是运行期间产生的，无法直接设置断点，所以HotSpot增加了以下参数来方便开发人员调试解释器：
+对于汇编级别的调试，我们可以手动使用GDB进行调试：
 
 ```bash
--XX:+TraceBytecodes -XX:StopInterpreterAt=<n>
+gdb build/linux-x86_64-normal-server-slowdebug/jdk/bin/java
 ```
 
-这组参数的作用是当遇到程序的第n条字节码指令时，便会中断程序执行，进入断点调试。调试 解释器部分代码时，把这两个参数加到java命令的参数后面即可。
+由于目前HotSpot在主流的操作系统上，都采用模板解释器来执行字节码，它与即时编译器一样，最终执行的汇编代码都是运行期间产生的，无法直接设置断点，所以HotSpot增加了一些参数来方便开发人员调试解释器。
 
-同理，我们可以在GDB中使用上面的参数启动调试Hotspot：
+我们可以先使用参数`-XX:+TraceBytecodes`，打印并找出你所感兴趣的字节码位置，中途可以使用`Ctrl + C`退出：
 
 ```bash
-gdb --args build/linux-x86_64-normal-server-slowdebug/jdk/bin/java -version -XX:+TraceBytecodes -XX:StopInterpreterAt=<n>
+set args -XX:+TraceBytecodes
+run
 ```
 
-接着，我们通过GDB在`${source_root}/src/hotspot/os/linux/os_linux.cpp`中的`os::breakpoint()`函数上打上断点:
+然后，再使用参数`-XX:StopInterpreterAt=<n>`，当遇到程序的第n条字节码指令时，便会进入`${source_root}/src/os/linux/vm/os_linux.cpp`中的空函数`breakpoint()`：
 
 ```bash
-b breakpoint
+set args -XX:+TraceBytecodes -XX:StopInterpreterAt=<n>
+```
+
+再通过GDB在`${source_root}/src/hotspot/os/linux/os_linux.cpp`中的`breakpoint()`函数上打上断点:
+
+```bash
+break breakpoint
 ```
 
 > 为什么要将断点打在这里？
 >
 > 去看`${source_root}/src/hotspot/share/interpreter/templateInterpreterGenerator.cpp`里，函数`TemplateInterpreterGenerator::generate_and_dispatch`中对`stop_interpreter_at()`的调用就知道了.
 
-然后就可以通过GDB中开始运行java程序，开始调试:
+接着我们开始运行hotspot：
 
 ```bash
-r
+run
 ```
+
+当命中断点时，我们再跳出`breakpoint()`函数：
+
+```bash
+finish
+```
+
+这样就会返回到真正的字节码的执行了。
+
+不过，我们还要跳过函数`TemplateInterpreterGenerator::generate_and_dispatch`中插入到字节码真正逻辑前的一些用于debug的逻辑：
+
+```c++
+if (PrintBytecodeHistogram)                                    histogram_bytecode(t);
+// debugging code
+if (CountBytecodes || TraceBytecodes || StopInterpreterAt > 0) count_bytecode();
+if (PrintBytecodePairHistogram)                                histogram_bytecode_pair(t);
+if (TraceBytecodes)                                            trace_bytecode(t);
+if (StopInterpreterAt > 0)                                     stop_interpreter_at();
+```
+
+比如开启了参数`-XX:+TraceBytecodes`和`-XX:StopInterpreterAt=<n>`，应该跳过的指令如下：
+
+```assembly
+# count_bytecode()对应指令:
+0x7fffe07e8261:	incl   0x16901039(%rip)        # 0x7ffff70e92a0 <BytecodeCounter::_counter_value>
+# trace_bytecode(t)对应指令:
+0x7fffe07e8267:	mov    %rsp,%r12
+0x7fffe07e826a:	and    $0xfffffffffffffff0,%rsp
+0x7fffe07e826e:	callq  0x7fffe07c5edf
+0x7fffe07e8273:	mov    %r12,%rsp
+0x7fffe07e8276:	xor    %r12,%r12
+# stop_interpreter_at()对应指令:
+0x7fffe07e8279:	cmpl   $0x66,0x1690101d(%rip)        # 0x7ffff70e92a0 <BytecodeCounter::_counter_value>
+0x7fffe07e8283:	jne    0x7fffe07e828e
+0x7fffe07e8289:	callq  0x7ffff606281a <os::breakpoint()>
+
+#	.........................
+#	......真正的字节码逻辑......
+#	.........................
+
+# dispatch_epilog(tos_out, step)对应指令，用来取下一条指令执行...
+```
+
+进入真正的字节码逻辑后，我们就可以使用指令级别的`stepi`, `nexti`命令来进行跟踪调试了。（由于汇编代码都是运行期产生的，GDB中没有与源代码的对应符号信息，所以不能用C++源码行级命令`step`以及`next`）
 
 ## 配置IDEA
 
@@ -268,3 +317,5 @@ make java
 - [OpenJDK 编译调试指南(Ubuntu 16.04 + MacOS 10.15)](https://juejin.im/post/5ef8c6a86fb9a07e7654ef9d)
 - [JVM-在MacOS系统上使用CLion编译并调试OpenJDK12](https://www.howieli.cn/posts/macos-clion-build-debug-openjdk12.html)
 - [深入理解Java虚拟机：JVM高级特性与最佳实践(第3版)](https://item.jd.com/12607299.html)
+- [编译JDK源码踩坑纪实](https://juejin.im/post/6850037282893332487)
+- [How to  to debug the HotSpot interpreter](http://mail.openjdk.java.net/pipermail/hotspot-dev/2009-January/000990.html)
