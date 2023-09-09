@@ -8,7 +8,7 @@ tags:
 >
 > - [MIT 6.824](https://pdos.csail.mit.edu/6.824/schedule.html)
 > - [剑桥大学分布式系统](https://www.cl.cam.ac.uk/teaching/2122/ConcDisSys/)
-> - [CSE138](https://decomposition.al/CSE138-2021-03/)
+> - [CSE138](https://decomposition.al/CSE138-2021-03/schedule.html)
 
 
 
@@ -58,4 +58,56 @@ CH3: S3 -> S1 -> 【S2】
 如上，获得三倍的读性能(3个tail)，仍保证线性一致性
 
 
+
+## 缓存一致性-Frangipani
+
+### 缓存一致性协议
+分布式锁服务器（基于Paxos）：
+file    | owner
+----    | ----
+f       | client1
+g       | client2
+
+客户端：
+file    | status
+----    | ----
+f       | busy
+g       | idle(sticky lock)
+
+
+```mermaid
+sequenceDiagram
+	client1 ->> +lock server : request f
+	lock server ->> -client1 : grant f
+	Note over client1 : read f from Petal
+	Note over client1 : set to busy, modify f locally
+	Note over client1 : set to idle
+	client2 ->> +lock server : request f
+	lock server ->> +client1 : revoke f
+	Note over client1 : write f back to Petal
+	client1 ->> -lock server : release lock
+	lock server ->> -client2 : grant f
+	Note over client2 : read f from Petal
+```
+
+因为工作站访问Petal的文件需要获取锁，并且释放锁之前会将文件修改同步到Petal，所以保证了缓存一致性(cache coherence)，即后续对相同文件进行访问的工作站一定能看到最新的修改内容。
+
+### 原子性
+创建文件时，通过通过分布式锁保证内部操作以原子方式进行：
+```
+fun create("f",..){
+	acquire("f")
+		allocate inode
+		write inode
+		update dir("f",inode#)	
+	release("f")
+}
+```
+其它client读请求要等待锁释放和写回，不会看到中间状态
+file data
+### 崩溃恢复
+通过预写日志保证元数据(meta data)更新原子性：
+1. 先更新日志(通过校验和、整扇区写入保证日志完整)
+2. 再应用更新
+但文件数据(file data)不保证原子性，通常通过将所有数据写入一个临时文件后做原子重命名来实现。
 
