@@ -51,9 +51,9 @@ tags:
 ### 扩展并行读操作
 sharding将对象拆分未多条链
 ```
-CH1: S1 -> S2 -> 【S3】
-CH2: S2 -> S3 -> 【S1】
-CH3: S3 -> S1 -> 【S2】
+Chain1: S1 -> S2 -> S3(tail)
+Chain2: S2 -> S3 -> S1(tail)
+Chain3: S3 -> S1 -> S2(tail)
 ```
 如上，获得三倍的读性能(3个tail)，仍保证线性一致性
 
@@ -63,12 +63,14 @@ CH3: S3 -> S1 -> 【S2】
 
 ### 缓存一致性协议
 分布式锁服务器（基于Paxos）：
+
 file    | owner
 ----    | ----
 f       | client1
 g       | client2
 
 客户端：
+
 file    | status
 ----    | ----
 f       | busy
@@ -79,14 +81,17 @@ g       | idle(sticky lock)
 sequenceDiagram
 	client1 ->> +lock server : request f
 	lock server ->> -client1 : grant f
+	
 	Note over client1 : read f from Petal
 	Note over client1 : set to busy, modify f locally
 	Note over client1 : set to idle
+	
 	client2 ->> +lock server : request f
 	lock server ->> +client1 : revoke f
 	Note over client1 : write f back to Petal
 	client1 ->> -lock server : release lock
 	lock server ->> -client2 : grant f
+	
 	Note over client2 : read f from Petal
 ```
 
@@ -94,7 +99,7 @@ sequenceDiagram
 
 ### 原子性
 创建文件时，通过通过分布式锁保证内部操作以原子方式进行：
-```
+```pseudocode
 fun create("f",..){
 	acquire("f")
 		allocate inode
@@ -110,4 +115,17 @@ file data
 1. 先更新日志(通过校验和、整扇区写入保证日志完整)
 2. 再应用更新
 但文件数据(file data)不保证原子性，通常通过将所有数据写入一个临时文件后做原子重命名来实现。
+
+recovery demon负责处理崩溃恢复，不同阶段崩溃的处理方式
+
+- 写log前就崩溃
+  数据丢失
+- log写到Petal后崩溃
+  recovery demon仍能读取log，并应用log中记录的操作。完成后重新分配锁
+- 写log到Petal的过程中崩溃
+  文件的校验和检验就不会通过，recovery demon会停止在检验和不通过的记录之前
+
+### 日志冲突
+
+通过版本号控制，recovery demon应用日志需确保：日志版本 > inode当前版本
 
