@@ -11,7 +11,16 @@ tags:
 
 
 ## 存储
+
+### Disk-Oriented DBMS
+面向磁盘的DBMS将数据存放于磁盘，操作数据前需将数据从磁盘读入内存。
+- 通过Buffer Pool来管理数据在内存和磁盘之间的置换
+- Execution Engine执行查询，向Buffer Pool请求指定page的数据，后者负责将page读入内存返回内存指针
+- Buffer Pool Manager需保证该page在Execution Engine执行期间保持在该内存中
+![面向磁盘的DBMS架构](/assets/posts/disk-oriented-dbms-overview.png)
+
 ### 虚拟内存的问题
+为什么直接以来操作系统虚拟内存?
 操作系统虚拟内存(mmap)管理文件在内存和硬盘中的置换，适合只读文件。数据库一般自己管理实现定制化功能(madvice, mlock, msync)：
 - 事务需要以正确的顺序flush脏页（并发控制）
 - 数据预读取
@@ -47,6 +56,9 @@ tags:
 - 记录每个page id到文件位置的映射
 - 记录每个page空闲slots数
 - 维护空闲的页面
+- 确保目录页和数据页间同步(通过日志解决两种页无法原子写入)
+![Page目录数据结构](/assets/posts/heap-file-page-directory.png)
+
 
 #### 页面的布局
 每个页面包含header记录了该页的元数据：
@@ -54,17 +66,34 @@ tags:
 - Checksum.
 - DBMS version.
 - Transaction visibility
-- Self-containment. (Some systems like Oracle require this.)
+- Self-containment. ([自包含元数据](#页面page))
 
-A strawman approach to laying out data is to keep track of how many tuples the DBMS has stored in a
-page and then append to the end every time a new tuple is added. However, problems arise when tuples
-are deleted or when tuples have variable-length attributes.
-There are two main approaches to laying out data in pages: (1) slotted-pages and (2) log-structured.
-Slotted Pages: Page maps slots to offsets.
-- Most common approach used in DBMSs today.
-- Header keeps track of the number of used slots, the offset of the starting location of the last used
-slot, and a slot array, which keeps track of the location of the start of each tuple.
-- To add a tuple, the slot array will grow from the beginning to the end, and the data of the tuples will
-grow from end to the beginning. The page is considered full when the slot array and the tuple data
-meet.
-Log-Structured: 
+Page内部如何存储数据
+- Slotted Pages
+- Log Structured
+
+**Slotted Pages**
+多数DBMS使用的方法
+- slot数组: 映射每个元组(Tuple)的起始偏移量。
+- Header记录已使用slot数，最后一个slot的偏移量
+![Slotted Pages布局](/assets/posts/slotted-pages-layout.png)
+- 添加tupe时, slot数组从头部向尾部增长, 而tupe数据则从尾部向头部增长，两个部分重叠时标志page已满
+![Slotted Pages增长](/assets/posts/slotted-pages-grow.png)
+- 通过slot数组的间接映射，page内部可实现系统上层无感地移动tuple，只需修改对应slo数组偏移量即可，上层依旧能通过同样的page id + slot数组下标查找，如一些数据库会在tuple删除后执行compact操作。
+
+**Log-Structured**: TODO
+
+**Record Id**
+- 标识tuple的唯一id
+- 通常为: file_id + page_id + offset/slot
+- 可能包含文件位置的信息
+
+#### Tuple的布局
+```
+Tuple:
+| Header | Attribute Data |
+```
+- Header记录元数据如：可见信息、NULL值的BitMap等
+- Data部分存放属性的实际值，通常按创建table时指定的顺序存储
+- 多数DBMS不允许tuple大小超过一个page，因为要额外的元数据和指针来表示剩余部分所在page
+- 可能有反范式化tuple数据，如prejoin会将不同表的相关的tuples存储到同个page。可读取降低IO但是更新成本高
