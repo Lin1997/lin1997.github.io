@@ -147,3 +147,57 @@ Catalogs存放了数据库的元数据:
 - Users, permissions
 - Internal statistics
 多数DBMS将Catalogs存储在特殊的tables中，如INFORMATION_SCHEMA, 用代码初始化该table
+
+
+## 存储模型
+
+### 工作负载类型
+- 联机事务处理OLTP(On-Line Transaction Processing): 简单读写少量entity数据
+- 联机分析处理OLAP(On-Line Analytical Processing): 读取大数据进行复杂查询
+- 混合事物分析处理HTAP(Hybrid Transaction/Analytical Processing): 同时支持OLTP和OLAP
+不同的存储模型适应于不同的工作负载:
+
+### N-ary Storage Model
+即Row Storage(行式存储). 将每个tuple的属性连续存储到page中
+适用于OLTP: 只操作常数个entity, 大量执行insert操作.
+- +insert, update, delete 很快
+- +对于需要整个tuple的查询很友好
+- +可以利用Index-Organized Storage
+- -对于扫描大量tuple且只要其部分属性的查询效率低: 读取大量无用数据, 内存局部性差
+  ```sql
+  SELECT COUNT(U.lastLogin),
+      EXTRACT(month FROM U.lastLogin) AS month
+  FROM useracct AS U
+  WHERE U.hostname LIKE '%.gov'
+  GROUP BY EXTRACT(month FROM U.lastLogin)
+  ```
+  ![NSM执行OLAP](/assets/posts/nsm-olap-example.png)
+- -不利于压缩: 单个tupe各属性值域不同压缩率低
+
+### Decomposition Storage Model
+即Column Storage(列式存储). 将所有tuple中一列属性连续存储到page中
+适用于OLAP: 只读扫描整个table的部分属性
+![DSM执行OLAP](/assets/posts/dsm-olap-example.png)
+- +减少不必要的IO, 只读取需要的属性
+- +提高了内存局部性和缓存命中率
+- +更利于数据压缩
+- -对于点查询, inserts, updates, deletes慢, 因为Tuple得进行splitting拆分/stitching拼接/reorganization重组
+
+Tuple拆分和拼接(关联同个Tuple的不同属性):
+- Fixed-length Offsets: 同一个属性, 值的长度相同. 同个tuple不同列值的offset相同, 该offset = 内存偏移地址 / 属性固定长度. 通过dictionary compression将变长数据转换为定长值.
+![DSM Fixed-length Offsets](/assets/posts/dsm-fixed-length-offsets.png)
+- 内置tuple id: 列的每一个值都额外保存一个tuple id; 还需要一个表来映射tuple id到所有属性值的位置.
+![Embedded Tuple Ids](/assets/posts/dsm-embedded-tuple-Ids.png)
+
+### Partition Attributes Across
+混合了两种模式, 为了能获益于DSM的性能同时保持NSM的空间局部性: 前面OLAP查询例子中WHERE如果需要扫描多个属性, DSM的拆分会导致局部性不佳.
+先将table的rows水平分割成rows group, 每个row group的属性再垂直切割成按列存储.
+全局header中directory维护每个row group在文件中的offset.
+![PAX Organization](/assets/posts/pax-organization.png)
+比如, [Parquet将row group大小设置为128MB]([https://youtu.be/1j8SdS7s_NY?t=705]):
+![Parquet PAX Organization](/assets/posts/parquet-pax-organization.png)
+
+## Compression
+### Naive Compression
+
+### Columnar Compression
