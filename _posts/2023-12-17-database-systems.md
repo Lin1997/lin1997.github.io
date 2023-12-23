@@ -194,7 +194,7 @@ Tuple拆分和拼接(关联同个Tuple的不同属性):
 先将table的rows水平分割成rows group, 每个row group的属性再垂直切割成按列存储.
 全局header中directory维护每个row group在文件中的offset.
 ![PAX Organization](/assets/posts/pax-organization.png)
-比如, [Parquet将row group大小设置为128MB]([https://youtu.be/1j8SdS7s_NY?t=705]):
+比如, [Parquet将row group大小设置为128MB](https://youtu.be/1j8SdS7s_NY?t=705):
 ![Parquet PAX Organization](/assets/posts/parquet-pax-organization.png)
 
 ## Compression
