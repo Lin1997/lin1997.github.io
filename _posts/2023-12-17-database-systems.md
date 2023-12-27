@@ -194,10 +194,93 @@ Tuple拆分和拼接(关联同个Tuple的不同属性):
 先将table的rows水平分割成rows group, 每个row group的属性再垂直切割成按列存储.
 全局header中directory维护每个row group在文件中的offset.
 ![PAX Organization](/assets/posts/pax-organization.png)
-比如, [Parquet将row group大小设置为128MB](https://youtu.be/1j8SdS7s_NY?t=705):
+
+比如, [Parquet](https://youtu.be/1j8SdS7s_NY?t=705)将row group大小设置为128MB:
 ![Parquet PAX Organization](/assets/posts/parquet-pax-organization.png)
 
 ## Compression
+- 压缩能增加每次IO获取的数据量, 减少DRAM要求
+- 权衡计算速度 vs 压缩率
+
+目标
+- 生成定长值(变长的属性存到另外的pool)
+- 执行查询时尽量推迟解压缩
+- 无损
+
+粒度
+- Block Level: Tuple中的块
+- Tuple Level: 整个tuple (适用于NSM)
+- Attribute Level: 一个tuple中的一或多个属性
+- Columnar Level: 多个tuple的相同属性(适用于DSM)
+
 ### Naive Compression
+朴素地使用通用压缩算法以二进制形式压缩, 如gzip, LZO, LZ4, Snappy, Brotli, Oracle
+OZIP, Zstd.
+工程上通常不会用太高压缩率的算法保证压缩/解压速度.
+朴素压缩没有考虑schema的高级语义, 无法对查询计划进行优化.
+[MySQL Innodb](https://dev.mysql.com/doc/refman/8.0/en/innodb-compression-internals.html)使用了该方式:
+- 将Page划分对齐为若干KB, 以减少每次读写时压缩解压的范围, 存储到Buffer Pool
+- 为了避免每次写都进行解压, 将写记录到额外的mod log; 读取时记录在mod log则无序解压已压缩Page.
+![MySQL Innodb Compression](/assets/posts/mysql-innodb-compression.png)
 
 ### Columnar Compression
+我们希望DBMS能够无需解压, 通过将查询转换, 直接操作已压缩数据. 可以利用以下DSM的Columnar Compression算法
+**Run-Length Encoding (RLE)**
+- 将列中相同的值压缩为3元组: (属性值, 开始位置, 连续个数)
+![Run-Length Encoding](/assets/posts/run-length-encoding.png)
+- 更适用于已排序列
+- 通过转换查询直接操作已压缩数据:
+```sql
+SELECT isDead, COUNT(*)
+ FROM users
+GROUP BY isDead
+-- 转化为sum(连续个数)
+```
+
+**Bit-Packing Encoding**
+列中所有值都比数据类型定义的范围小, 则直接截断bit数
+![Bit-Packing Encoding](/assets/posts/bit-packing-encoding.png)
+
+**Mostly Encoding**
+Bit-Packing的变种, 对于小部分超出范围无法压缩的值特别维护一张表存储.
+![Mostly Encoding](/assets/posts/mostly-encoding.png)
+
+如[Amazon Redshift](http://docs.aws.amazon.com/redshift/latest/dg/c_MostlyN_encoding.html)使用了Mostly Encoding
+
+**Bitmap Encoding**
+- 为属性的每个唯一value存储一个bitmap, 某value的bitmap的第i位代表第i个tuple是否有该value, 从而无需重复地存储重复的value
+- 为了避免分配大块连续内存, 可以将bitmap分割成若干block
+- 仅适用于value集合的基数/势较低的属性, 否则bitmap可能比原始数据大
+![Bitmap Encoding](/assets/posts/bitmap-encoding.png)
+
+如一些数据库提供的[bitmap indexes](https://dbdb.io/browse?indexes=bitmap)
+
+**Delta Encoding**
+- 记录同一列中相邻value的差值
+- 基值可以是原列中的的, 或单独存储一个查找表
+- 可以结合RLE使用
+![Bitmap Encoding](/assets/posts/delta-encoding.png)
+
+**Dictionary Compression**
+- 将频次高的value替换为更小的定长code, 并维护code到原始值的映射(dictionary)
+- DBMS最常使用的压缩方式
+- 支持快速编码/解码以及范围查询
+- 支持保留与原始值相同的顺序排序
+![Dictionary Compression: 保持顺序](/assets/posts/dictionary-compression-order-preserving.png)
+- 优化: 如果只对压缩列进行distinct查询, 则只需读取dictionary无需扫描原列:
+```sql
+-- 仍然需扫描原列
+SELECT name FROM users
+WHERE name LIKE 'And%'
+
+-- 只需读取dictionary
+SELECT DISTINCT name
+ FROM users
+WHERE name LIKE 'And%'
+```
+
+Dictionary数据结构
+- Array: 简单但更新成本高; 适用于不可变数据
+![Dictionary的Array实现](/assets/posts/dictionary-compression-array-impl.png)
+- Hash: 速度快且紧凑; 但不支持范围和前缀查询
+- B+ Tree: 比hash table慢些, 且占用更多内存; 但支持范围查询和前缀查询
