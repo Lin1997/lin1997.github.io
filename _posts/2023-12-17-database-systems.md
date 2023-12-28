@@ -357,13 +357,13 @@ DBMS可以为不同的目的维护多个Buffer Pool, 如:
 每个Buffer Pool都可以采用适合其存储数据的策略; 有助于减少Latch争用并提高局部性。
 将Page映射到Buffer Pool的方法:
 - Object ID: 扩展Record ID以包含Object ID, 通过其将对象映射到特定Buffer Pool
-![Object ID映射到Buffer Pool](../assets/posts/multiple-buffer-pools-with-object-id.png)
+![Object ID映射到Buffer Pool](/assets/posts/multiple-buffer-pools-with-object-id.png)
 - Hash: 对PageID进行哈希以选择Buffer Pool。
 
 **预取**
 通过基于查询计划, 进行Page预取来进行优化:
 - 在处理第一组Page时，预取第二组Page
-![顺序scan时进行Page预取](../assets/posts/dbms-page-prefetch.png)
+![顺序scan时进行Page预取](/assets/posts/dbms-page-prefetch.png)
 - 根据树索引预取叶子Page
 
 ```sql
@@ -371,7 +371,7 @@ SELECT * FROM A
 WHERE val BETWEEN 100 AND 250
 ```
 
-![根据索引进行Page预取](../assets/posts/dbms-page-prefetch-by-index.png)
+![根据索引进行Page预取](/assets/posts/dbms-page-prefetch-by-index.png)
 
 **扫描共享（同步扫描）**
 查询游标可以重用从存储中检索的数据或运算符计算的数据。这允许多个查询连接到扫描表的单个游标。如果一个查询开始扫描，如果已经有一个查询正在执行此操作，那么DBMS将将第二个查询的游标连接到现有游标。DBMS跟踪第二个查询加入第一个查询的位置，以便在到达数据结构末尾时完成扫描。
