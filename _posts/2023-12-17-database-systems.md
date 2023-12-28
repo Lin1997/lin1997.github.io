@@ -114,10 +114,12 @@ Page内部如何存储数据
 - Write-Amplification(写入放大): compact时需要从磁盘读出, 合并后再次写入
 
 #### Tuple的布局
+
 ```
 Tuple:
 | Header | Attribute Data |
 ```
+
 - Header记录元数据如：可见信息、NULL值的BitMap等
 - Data部分存放属性的实际值(以字节序列形式)，通常按创建table时指定的顺序存储
 - [Catalogs](#Catalogs)包含table的schema信息, 以此来解释Attribute Data的类型和值
@@ -165,6 +167,7 @@ Catalogs存放了数据库的元数据:
 - +对于需要整个tuple的查询很友好
 - +可以利用Index-Organized Storage
 - -对于扫描大量tuple且只要其部分属性的查询效率低: 读取大量无用数据, 内存局部性差
+  
   ```sql
   SELECT COUNT(U.lastLogin),
       EXTRACT(month FROM U.lastLogin) AS month
@@ -172,6 +175,7 @@ Catalogs存放了数据库的元数据:
   WHERE U.hostname LIKE '%.gov'
   GROUP BY EXTRACT(month FROM U.lastLogin)
   ```
+  
   ![NSM执行OLAP](/assets/posts/nsm-olap-example.png)
 - -不利于压缩: 单个tupe各属性值域不同压缩率低
 
@@ -231,6 +235,7 @@ OZIP, Zstd.
 ![Run-Length Encoding](/assets/posts/run-length-encoding.png)
 - 更适用于已排序列
 - 通过转换查询直接操作已压缩数据:
+
 ```sql
 SELECT isDead, COUNT(*)
  FROM users
@@ -269,6 +274,7 @@ Bit-Packing的变种, 对于小部分超出范围无法压缩的值特别维护�
 - 支持保留与原始值相同的顺序排序
 ![Dictionary Compression: 保持顺序](/assets/posts/dictionary-compression-order-preserving.png)
 - 优化: 如果只对压缩列进行distinct查询, 则只需读取dictionary无需扫描原列:
+
 ```sql
 -- 仍然需扫描原列
 SELECT name FROM users
@@ -359,10 +365,12 @@ DBMS可以为不同的目的维护多个Buffer Pool, 如:
 - 在处理第一组Page时，预取第二组Page
 ![顺序scan时进行Page预取](../assets/posts/dbms-page-prefetch.png)
 - 根据树索引预取叶子Page
+
 ```sql
 SELECT * FROM A
 WHERE val BETWEEN 100 AND 250
 ```
+
 ![根据索引进行Page预取](../assets/posts/dbms-page-prefetch-by-index.png)
 
 **扫描共享（同步扫描）**
