@@ -146,6 +146,7 @@ Catalogs存放了数据库的元数据:
 - Tables, columns, indexes, views
 - Users, permissions
 - Internal statistics
+
 多数DBMS将Catalogs存储在特殊的tables中，如INFORMATION_SCHEMA, 用代码初始化该table
 
 
@@ -198,7 +199,7 @@ Tuple拆分和拼接(关联同个Tuple的不同属性):
 比如, [Parquet](https://youtu.be/1j8SdS7s_NY?t=705)将row group大小设置为128MB:
 ![Parquet PAX Organization](/assets/posts/parquet-pax-organization.png)
 
-## Compression
+## 压缩
 - 压缩能增加每次IO获取的数据量, 减少DRAM要求
 - 权衡计算速度 vs 压缩率
 
@@ -284,3 +285,132 @@ Dictionary数据结构
 ![Dictionary的Array实现](/assets/posts/dictionary-compression-array-impl.png)
 - Hash: 速度快且紧凑; 但不支持范围和前缀查询
 - B+ Tree: 比hash table慢些, 且占用更多内存; 但支持范围查询和前缀查询
+
+## 内存管理
+
+### 目的
+
+![面向磁盘的DBMS架构](/assets/posts/disk-oriented-dbms-overview.png)
+
+**空间控制** 
+- Page在磁盘上的写入位置
+- 目标: 尽可能将经常一起使用的Page在磁盘上物理上靠近
+
+**时间控制**
+- 何时将Page读入内存以及何时将其写入磁盘
+- 目标: 最小化由于从磁盘读取数据而导致的停顿次数
+
+### Locks和Latches
+
+**Locks**
+- **高级别**的**逻辑**原语，用于保护数据库的逻辑内容(如元组、表、数据库)免受其他**事务**的干扰
+- Lock将在其整个事务持续时间内持有
+- 数据库系统可以向**用户公开**查询运行时持有的锁
+- 锁需要能够**回滚更改**
+
+**Latches**
+- DBMS在其**内部数据结构**(如哈希表、内存区域)的临界区使用的**低级别**保护原语
+- 只在执行操作的时间内持有
+- 无需回滚更改
+
+### Buffer Pool
+
+#### 内存组织
+- 在数据库内分配的一个大内存区域，用于存储从磁盘读取的Page
+- 组织成一个Page的数组, 每个条目称为一个frame
+- 当DBMS请求一个Page时，它会从磁盘复制到Buffer Pool的一个Frame中
+- 脏页面可以被缓存起来，不立即写回
+- 需要Latch来解决Page Table的线程竞争修改
+![Buffer Pool组织和元数据](/assets/posts/buffer-pool-organization.png)
+
+#### Page Table
+- 一个在内存中的哈希表，用于跟踪当前在内存中的Page
+- 将Page ID映射到Buffer Pool中的Frame位置; 由于Buffer Pool中Page的顺序不一定和磁盘上的顺序一致，需要该间接层来确定Page位置
+- 维护每个Page的额外元数据:
+  - 脏标志: 由线程在修改Page时设置, 向存储管理器指示Page必须写回磁盘
+  - 引用计数: 跟踪当前访问该Page的线程数(读取或修改), 大于零则不允许存储管理器从内存中逐出该Page
+  - 访问跟踪信息: TODO
+
+#### 内存分配策略
+
+**全局策略**
+为所有活动事务找到分配内存的最佳决策
+
+**本地策略**
+- 使单个查询或事务运行更快的决策, 不考虑并发的事务
+- 但需要支持page共享: TODO
+
+大多数系统使用全局和本地视图的组合
+
+### Buffer Pool优化
+
+**多个Buffer Pool**
+DBMS可以为不同的目的维护多个Buffer Pool, 如:
+- 每个数据库一个Buffer Pool
+- 每个Page类型一个Buffer Pool
+每个Buffer Pool都可以采用适合其存储数据的策略; 有助于减少Latch争用并提高局部性。
+将Page映射到Buffer Pool的方法:
+- Object ID: 扩展Record ID以包含Object ID, 通过其将对象映射到特定Buffer Pool
+![Object ID映射到Buffer Pool](../assets/posts/multiple-buffer-pools-with-object-id.png)
+- Hash: 对PageID进行哈希以选择Buffer Pool。
+
+**预取**
+通过基于查询计划, 进行Page预取来进行优化:
+- 在处理第一组Page时，预取第二组Page
+![顺序scan时进行Page预取](../assets/posts/dbms-page-prefetch.png)
+- 根据树索引预取叶子Page
+```sql
+SELECT * FROM A
+WHERE val BETWEEN 100 AND 250
+```
+![根据索引进行Page预取](../assets/posts/dbms-page-prefetch-by-index.png)
+
+**扫描共享（同步扫描）**
+查询游标可以重用从存储中检索的数据或运算符计算的数据。这允许多个查询连接到扫描表的单个游标。如果一个查询开始扫描，如果已经有一个查询正在执行此操作，那么DBMS将将第二个查询的游标连接到现有游标。DBMS跟踪第二个查询加入第一个查询的位置，以便在到达数据结构末尾时完成扫描。
+Buffer Pool绕过顺序扫描运算符不会将获取的Page存储在Buffer Pool中以避免开销。相反，内存是运行查询的本地内存。如果运算符需要读取磁盘上连续的大量Page，则Buffer Pool绕过可以用于临时数据（排序、连接）。
+
+### 缓冲替换策略
+当DBMS需要释放一个帧以腾出空间给新Page时，它必须决定从Buffer Pool中驱逐哪个Page。
+替换策略是DBMS实施的一种算法，用于在需要空间时决定从Buffer Pool中驱逐哪些Page。
+替换策略的实施目标是提高正确性、准确性、速度和元数据开销。
+最近最少使用（LRU）
+最近最少使用的替换策略维护每个Page上一次访问的时间戳。DBMS选择驱逐具有最旧时间戳的Page。此时间戳可以存储在单独的数据结构中，如队列中，以进行排序并通过减少淘汰时的排序时间来提高效率。
+CLOCK
+CLOCK策略是LRU的一种近似，无需每个Page都有单独的时间戳。在CLOCK策略中，每个Page都有一个引用位。当访问Page时，将其设置为1。
+为了可视化，将Page组织成带有“时钟手”的循环缓冲区。在扫描时，检查Page的位是否设置为1。如果是，则将其设置为零；如果不是，则将其淘汰。通过这种方式，时钟手记住了淘汰之间的位置。
+替代方案
+LRU和CLOCK替代策略存在一些问题。
+15-445/645 数据库系统
+第3页 共5页
+2023年秋季 – 第06讲 Buffer Pool
+图3：CLOCK替代策略的可视化。Page1被引用并设置为1。
+当时钟手扫过时，它将Page1的引用位设置为0，并淘汰Page5。
+换句话说，LRU和CLOCK易受到顺序泛滥的影响，其中由于顺序扫描而使Buffer Pool的内容受损。由于顺序扫描快速读取许多Page，Buffer Pool会填满，并且其他查询的Page会被淘汰，因为它们的时间戳较早。在这种情况下，最近的时间戳不准确反映我们实际想要淘汰的Page。
+有三种解决LRU和CLOCK策略缺陷的方法。
+一种解决方案是LRU-K，它跟踪最近K个引用的历史作为时间戳，并计算连续访问之间的间隔。此历史用于预测下一次访问Page的时间。
+另一种优化是每个查询的本地化。DBMS选择在每个事务/查询基础上淘汰哪些Page。这减少了每个查询对Buffer Pool的污染。
+最后，优先级提示允许事务根据查询执行期间每个Page的上下文告诉Buffer PoolPage是重要还是不重要。
+脏Page
+处理带有脏位的Page有两种方法。最快的选项是丢弃Buffer Pool中不脏的任何Page。较慢的方法是将脏Page写回磁盘，以确保其更改被持久化。这两种方法说明了快速淘汰与写回将来不会再次读取的Page之间的权衡。
+避免不必要写出Page的问题的一种方法是背景写入。通过背景写入，DBMS可以定期遍历Page Table并将脏Page写回磁盘。当脏Page安全写入时，DBMS可以驱逐Page或仅取消脏标志。
+
+### 其他内存池
+DBMS需要内存来存储除了元组和索引之外的其他信息。这些其他内存池根据具体实现可能并不总是由磁盘支持。
+• 排序 + 连接缓冲区
+• 查询缓存
+• 维护缓冲区
+• 日志缓冲区
+• 字典缓存
+
+### 操作系统页面缓存
+大多数磁盘操作通过操作系统API进行。除非明确说明，否则操作系统会维护自己的文件系统缓存。
+大多数DBMS使用直接I/O来绕过操作系统的缓存，以避免页面的冗余复制和管理不同的淘汰策略。
+Postgres是一个使用操作系统页面缓存的数据库系统的例子。
+
+### 磁盘I/O调度
+DBMS维护内部队列来跟踪来自整个系统的页面读写请求。任务的优先级取决于多个因素：
+• 顺序 vs. 随机I/O
+• 临界路径任务 vs. 后台任务
+• 表 vs. 索引 vs. 日志 vs. 瞬时数据
+• 事务信息
+• 基于用户的服务水平协议（SLAs）
