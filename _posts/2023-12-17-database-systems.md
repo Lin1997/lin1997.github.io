@@ -352,7 +352,7 @@ Dictionary数据结构
 
 ### 优化
 
-**多个Buffer Pool**
+**Multiple Buffer Pools**
 DBMS可以为不同的目的维护多个Buffer Pool, 如:
 - 每个数据库一个Buffer Pool
 - 每个Page类型一个Buffer Pool
@@ -362,7 +362,7 @@ DBMS可以为不同的目的维护多个Buffer Pool, 如:
 ![Object ID映射到Buffer Pool](/assets/posts/multiple-buffer-pools-with-object-id.png)
 - Hash: 对PageID进行哈希以选择Buffer Pool。
 
-**预取**
+**Pre-fetching**
 
 通过基于查询计划, 进行Page预取来进行优化:
 - 在处理第一组Page时，预取第二组Page
@@ -376,17 +376,18 @@ WHERE val BETWEEN 100 AND 250
 
 ![根据索引进行Page预取](/assets/posts/dbms-page-prefetch-by-index.png)
 
-**扫描共享（同步扫描）**
+**Scan Sharing (Synchronized Scans)**
 
 查询游标可以重用从存储中检索的数据, 或完成计算的操作数据:
 - 允许多个查询连接到扫描表的单个游标
 - 如果一个新查询将开始扫描表，发现存在现有查询正在执行此操作，那么DBMS会将新查询的游标连接到现有游标。DBMS跟踪新查询加入现有查询时的位置，以便在到达数据结构末尾时继续完成扫描。
 
-**绕过Buffer Pool**
+**Buffer Pool Bypass**
 
 不将顺序扫描操作获取的Page存储到Buffer Pool中以避免污染, 因为这些页面再次命中率低:
 - 使用本查询的本地内存
 - 也会用于需要存储临时数据的操作, 如sorting, joins
+
 例子: Informix的[Light Scans](https://www.ibm.com/docs/en/informix-servers/14.10?topic=io-light-scans)
 
 ### 缓冲替换策略
@@ -422,36 +423,48 @@ LRU和CLOCK易受到sequential flooding(顺序泛滥)的影响: 由于顺序扫�
 <center>Sequential Flooding导致Q3需要的Page0被淘汰</center>
 
 解决方案:
-LRU-K: 跟踪最近K个引用的历史时间戳，并计算连续访问之间的间隔。此历史用于预测下一次访问Page的时间。
-查询的本地化: DBMS在每个事务/查询基础上选择淘汰哪些Page。这减少了每个查询对Buffer Pool的污染。
-优先级提示: 事务根据查询执行的上下文, 告诉Buffer Pool哪些Page是重要/不重要。
+- LRU-K: 跟踪最近K次引用的历史时间戳，并计算连续访问之间的间隔。淘汰掉间隔最大的Page。
+  MySQL的近似LRU-K: 
+  - 为LRU List维护两个HEAD, Young Head和Old Head, 将List划分为Young List和Old List.
+  - 新Page先插入Old Head;
+  - Old List里的Page被再次访问时, 将其插入到Young Head
+  
+  ![MySQL Approximate LRU-K](/assets/posts/mysql-approximate-lru-k.png)
 
-### 脏页
+- 查询的本地化: DBMS在每个事务/查询基础上选择淘汰哪些Page。这减少了每个查询对Buffer Pool的污染。
+- 优先级提示: 事务根据查询执行的上下文, 告诉Buffer Pool哪些Page是重要/不重要。比如:
+  - 将tree index的root所在page设置高优先级
+  - 自增id插入时将覆盖id范围的page设置高优先级
+
+### 脏页淘汰
 
 处理带有脏标志的Page的方法:
-- 最快的选项是丢弃Buffer Pool中不脏的任何Page
-- 较慢的方法是将脏页写回磁盘，以确保其更改被持久化。
+- 最快的方式: 丢弃**不**带脏标志的任何Page
+- 较慢的方式: 将脏页写回磁盘，确保其更改被持久化。
 
-这两种方法说明了快速淘汰与写回将来不会再次读取的Page之间的权衡。
-避免不必要写出Page的问题的一种方法是背景写入。通过背景写入，DBMS可以定期遍历Page Table并将脏页写回磁盘。当脏页安全写入时，DBMS可以驱逐Page或仅取消脏标志。
+需根据硬件性能权衡: 快速淘汰干净Page, 还是将不会再次读取的脏Page写回。
+通过定期后台写入脏页任务可以取消脏标志。
 
 ### 其他内存池
-DBMS需要内存来存储除了元组和索引之外的其他信息。这些其他内存池根据具体实现可能并不总是由磁盘支持。
+
+DBMS需要内存来存储除了Tuple和索引之外的其他信息。这些其他内存池根据具体实现可能并不总是由磁盘支持。
 - 排序 + 连接缓冲区
 - 查询缓存
 - 维护缓冲区
 - 日志缓冲区
 - 字典缓存
 
-### 操作系统页面缓存
-大多数磁盘操作通过操作系统API进行。除非明确说明，否则操作系统会维护自己的文件系统缓存。
-大多数DBMS使用直接I/O来绕过操作系统的缓存，以避免页面的冗余复制和管理不同的淘汰策略。
-Postgres是一个使用操作系统页面缓存的数据库系统的例子。
+### 磁盘IO调度
 
-### 磁盘I/O调度
-DBMS维护内部队列来跟踪来自整个系统的页面读写请求。任务的优先级取决于多个因素：
-- 顺序 vs. 随机I/O
-- 临界路径任务 vs. 后台任务
-- 表 vs. 索引 vs. 日志 vs. 瞬时数据
+多数DBMS文档推荐将OS调度器设置为Deadline或NOOP(FIFO), 并自己维护内部队列在更高语义上跟踪来自整个系统的页面读写请求, 以优化IO性能。如: [Oracle](https://docs.oracle.com/en/database/oracle/oracle-database/23/ladbi/setting-the-disk-io-scheduler-on-linux.html#GUID-B59FCEFB-20F9-4E64-8155-7A61B38D8CDF), [Vertica](https://docs.vertica.com/23.3.x/en/setup/set-up-on-premises/before-you-install/manually-configured-os-settings/io-scheduling/), [MySQL](https://dev.mysql.com/doc/refman/8.0/en/innodb-linux-native-aio.html)
+
+任务的优先级取决于多个因素：
+- 顺序 vs 随机IO
+- 关键任务 vs 后台任务
+- 表 vs 索引(有latch故高优先级) vs 日志(尽快写出) vs 临时数据
 - 事务信息
 - 基于用户的服务水平协议（SLAs）
+
+### OS Page Cache
+
+通常系统会维护自身文件页缓存，这会导致一份数据分别在操作系统和 DBMS 中被缓存两次。大多数DBMS都会使用 (O_DIRECT) 来告诉 OS 不要缓存这些数据
