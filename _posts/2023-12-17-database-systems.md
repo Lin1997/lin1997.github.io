@@ -107,9 +107,9 @@ Page内部如何存储数据
 - 通过构建index，将Tuple映射到最新Log Record偏移量
 ![Log Structured索引](/assets/posts/log-structured-read.png)
 - 可以周期性compact, 使Tuple只保留一条记录
-![Log Structured索引](/assets/posts/log-structured-compaction.png)
+![Log Structured Compact](/assets/posts/log-structured-compaction.png)
 - 通过[Sorted String Tables](http://ddia.vonng.com/#/ch3?id=sstables%e5%92%8clsm%e6%a0%91)(SSTables)维护id有序索引加速查找
-![Log Structured索引](http://ddia.vonng.com/img/fig3-5.png)
+![SSTable](/assets/posts/dbms-sstable.png)
 - 分层并维护多个SSTables即[Log-Structured Merge-Tree](http://ddia.vonng.com/#/ch3?id=sstables%e5%92%8clsm%e6%a0%91)(LSM tree)
 - Write-Amplification(写入放大): compact时需要从磁盘读出, 合并后再次写入
 
@@ -447,7 +447,7 @@ LRU和CLOCK易受到sequential flooding(顺序泛滥)的影响: 由于顺序扫�
 
 ### 其他内存池
 
-DBMS需要内存来存储除了Tuple和索引之外的其他信息。这些其他内存池根据具体实现可能并不总是由磁盘支持。
+DBMS需要内存来存储除了Tuple和索引之外的其他信息。根据具体实现, 这些内存池可能并不总是需要写入磁盘:
 - 排序 + 连接缓冲区
 - 查询缓存
 - 维护缓冲区
