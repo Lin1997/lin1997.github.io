@@ -65,7 +65,7 @@ tags:
 - Checksum.
 - DBMS version.
 - Transaction visibility
-- Self-containment. ([自包含元数据](#页面page))
+- Self-containment. ([自包含元数据](#page))
 
 Page内部如何存储数据
 - [Slotted Pages Storage](#slotted-pages-storage)
@@ -122,7 +122,7 @@ Tuple:
 
 - Header记录元数据如：可见信息、NULL值的BitMap等
 - Data部分存放属性的实际值(以字节序列形式)，通常按创建table时指定的顺序存储
-- [Catalogs](#Catalogs)包含table的schema信息, 以此来解释Attribute Data的类型和值
+- [Catalogs](#catalogs)包含table的schema信息, 以此来解释Attribute Data的类型和值
 - 多数DBMS不允许Tuple大小超过一个page，因为要额外的元数据和指针来表示剩余部分所在overflow page
 - 可能有反范式化Tuple数据，如prejoin会将不同表的相关的Tuples存储到同个page。可读取降低IO但是更新成本高
 
@@ -563,6 +563,9 @@ Google 的 [absl::flat_hash_map](https://abseil.io/tips/136) 是线性探测哈�
 #### 线性哈希
 
 与在溢出时立即扩容拆分桶不同(需对Table Latch)，这个方案维护一个分裂指针，用于跟踪下一个要拆分的桶。
+
+![Linear Hashing](/assets/posts/dbms-linear-hashing.png)
+
 - 任何桶溢出时，在拆分指针所指向的桶(无论该指针是否指向了溢出的桶)。添加一个新的槽存放新桶指针，和一个新的哈希函数，并使用此函数对拆分桶中的键进行重新哈希
 - 然后分裂指针移向下一个槽，因此分裂指针之前的槽是被分裂过的
 - 插入值时，如果使用原始哈希函数将映射到曾被分裂的槽，需要应用新的哈希函数来确定键的实际位置
