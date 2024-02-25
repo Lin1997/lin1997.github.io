@@ -743,7 +743,7 @@ Tuple在堆的页面中按照由聚簇索引指定的顺序进行排序。如果
 
 ## 索引并发控制
 
-**1. 索引并发控制**
+### 索引并发控制
 到目前为止，我们假设我们讨论的数据结构是单线程的。然而，大多数数据库管理系统（DBMS）需要允许多个线程安全地访问数据结构，以利用额外的CPU核心并隐藏磁盘I/O延迟。
 
 有些系统使用单线程模型。将单线程数据结构转换为多线程的一种简单方法是使用read-write lock，但这并不高效。
@@ -756,29 +756,33 @@ Tuple在堆的页面中按照由聚簇索引指定的顺序进行排序。如果
 
 本讲只关心强制执行物理正确性。我们将在后续讨论逻辑正确性。
 
-**2. Latches的实现**
+### Locks vs Latches
 在讨论DBMS如何保护其内部元素时，Locks和Latches之间有一个重要的区别。
 
-**Locks**：Locks是一种高级的逻辑原语，它保护数据库内容（例如，元组、表、数据库）免受其他事务的干扰。事务在其整个持续时间内都会持有Locks。数据库系统可以向用户展示正在运行的查询所持有的Locks。应该有一些高级机制来检测死锁并回滚更改。
+#### Locks
+Locks是一种高级的逻辑原语，它保护数据库内容（例如，元组、表、数据库）免受其他事务的干扰。事务在其整个持续时间内都会持有Locks。数据库系统可以向用户展示正在运行的查询所持有的Locks。应该有一些高级机制来检测死锁并回滚更改。
 
-**Latches**：Latches是用于保护DBMS内部数据结构（例如，数据结构、内存区域）的低级保护原语。Latches在数据库系统中用于简单操作（如: page latch）时仅持有很短的时间。Latches有两种模式：
+#### Latches
+Latches是用于保护DBMS内部数据结构（例如，数据结构、内存区域）的低级保护原语。Latches在数据库系统中用于简单操作（如: page latch）时仅持有很短的时间。Latches有两种模式：
 - 读：允许多个线程同时读取同一个项目。即使另一个线程已经以读模式获取了Latches，线程也可以获取读模式的Latches。
 - 写：只允许一个线程访问项目。如果另一个线程以任何模式持有Latches，线程无法获取写Latches。持有写Latches的线程也会阻止其他线程获取读Latches。
 
 
-**3. Latches的实现**
+### Latches的实现
 Latches的实现应该具有较小的内存占用，并且在没有竞争时可能有快速路径来获取Latches。
 用于实现Latches的基本原语是通过现代CPU提供的原子指令。通过这些指令，线程可以检查内存位置的内容，以确定它是否具有某个值。
 
 在DBMS中有几种实现Latches的方法。每种方法在工程复杂性和运行时性能方面都有不同的权衡。这些测试和设置步骤是原子执行的（即，在测试和设置步骤之间，没有其他线程可以更新值）。
 
-**Test-and-Set Spin Latch（TAS）**：Spin Latch是操作系统mutex的更有效替代方案，因为它由DBMS控制。Spin Latch本质上是线程尝试更新的内存位置（例如，将布尔值设置为true）。线程执行CAS操作，尝试更新内存位置。DBMS可以控制无法获取Latches时的行为。它可以选择再次尝试（例如，使用while循环），或允许操作系统将其取消调度。因此，这种方法比操作系统mutex给了DBMS更多的控制，因为在无法获取Latches时，后者的控制权交给了操作系统。
+#### Test-and-Set Spin Latch(TAS)
+Spin Latch是操作系统mutex的更有效替代方案，因为它由DBMS控制。Spin Latch本质上是线程尝试更新的内存位置（例如，将布尔值设置为true）。线程执行CAS操作，尝试更新内存位置。DBMS可以控制无法获取Latches时的行为。它可以选择再次尝试（例如，使用while循环），或允许操作系统将其取消调度。因此，这种方法比操作系统mutex给了DBMS更多的控制，因为在无法获取Latches时，后者的控制权交给了操作系统。
 
 - 示例：std::atomic<T>
 - 优点：latch/unlatch操作效率高（在x86上只需单指令）。
 - 缺点：不可扩展且对缓存不友好，因为多个线程会在不同线程中多次执行CAS指令。这些浪费的指令会在高竞争环境中累积；线程在操作系统看来很忙，尽管它们没有进行有用的工作。这会导致缓存一致性问题，因为线程在其他CPU上轮询缓存行。
 
-**Blocking OS Mutex**：Latches的一种可能实现是操作系统内置的mutex基础设施。Linux提供了futex（fast user-space mutex），它由（1）用户空间的Spin Latch和（2）操作系统级别的mutex组成。如果DBMS能够获取用户空间latch，那么latch就会被设置。即使它包含两个内部latches，对DBMS来说它看起来像是一个单一的latch。如果DBMS无法获取用户空间latch，那么它会进入内核并尝试获取更昂贵的mutex。如果DBMS无法获取这个第二个mutex，那么线程会通知操作系统它被阻塞在mutex上，然后它会被取消调度。
+#### Blocking OS Mutex
+Latches的一种可能实现是操作系统内置的mutex基础设施。Linux提供了futex（fast user-space mutex），它由（1）用户空间的Spin Latch和（2）操作系统级别的mutex组成。如果DBMS能够获取用户空间latch，那么latch就会被设置。即使它包含两个内部latches，对DBMS来说它看起来像是一个单一的latch。如果DBMS无法获取用户空间latch，那么它会进入内核并尝试获取更昂贵的mutex。如果DBMS无法获取这个第二个mutex，那么线程会通知操作系统它被阻塞在mutex上，然后它会被取消调度。
 
 操作系统mutex通常在DBMS内部不是个好主意，因为它由操作系统管理，并且开销很大。
 
@@ -786,7 +790,8 @@ Latches的实现应该具有较小的内存占用，并且在没有竞争时可�
 - 优点：使用简单，不需要在DBMS中进行额外编码。
 - 缺点：昂贵且不可扩展（每次latch/unlatch调用大约25纳秒），因为操作系统调度。
 
-**Reader-Writer Latches**：Mutex和Spin Latch不区分读/写（即，它们不支持不同模式）。DBMS需要一种方法来允许并发读取，这样在应用程序读取量很大时，性能会更好，因为读者可以共享资源，而不是等待。
+#### Reader-Writer Latches
+Mutex和Spin Latch不区分读/写（即，它们不支持不同模式）。DBMS需要一种方法来允许并发读取，这样在应用程序读取量很大时，性能会更好，因为读者可以共享资源，而不是等待。
 
 Reader-Writer Latches允许Latches以读或写模式持有。它跟踪每种模式下持有Latches的线程数量以及等待获取每种模式Latches的线程数量。不同的DBMS可以有不同的策略来处理队列。
 
@@ -797,21 +802,23 @@ Reader-Writer Latches允许Latches以读或写模式持有。它跟踪每种模�
 - 缺点：DBMS必须管理读写队列以避免饥饿。由于额外的元数据，存储开销比Spin Latch大。
 
 
-**4. Hash Table Latching**
+### Hash Table Latching
 由于线程访问数据结构的方式有限，因此在静态哈希表中支持并发访问是容易的。例如，当从一个Slot移动到下一个Slot时，所有线程都以相同的方向移动（即自顶向下）。线程也一次只访问一个Page/Slot。因此，在这种情况下不可能发生死锁，因为不可能有两个线程竞争对方持有的Latches。当我们需要调整表大小时，我们只需对整个表获取一个全局Latches来进行操作。
 
 在动态哈希方案（如[可扩展哈希](#可扩展哈希)）中，Latches的实现更为复杂，因为有更多共享状态需要更新，但总体方法相同。
 
 支持哈希表Latches的两种方法在粒度上分为：
 
-- **Page Latches**：每个Page都有自己的读写Latches，保护其全部内容。线程在访问Page之前获取读或写Latches。这降低了并行性，因为可能一次只有一个线程可以访问Page，但对于单个线程来说，访问Page中的多个Slot将非常快速，因为它只需要获取一个Latches。
+- **Page Latches**：
+  每个Page都有自己的读写Latches，保护其全部内容。线程在访问Page之前获取读或写Latches。这降低了并行性，因为可能一次只有一个线程可以访问Page，但对于单个线程来说，访问Page中的多个Slot将非常快速，因为它只需要获取一个Latches。
 
-- **Slot Latches**：每个Slot都有自己的Latches。这增加了并行性，因为两个线程可以在同一Page上访问不同的Slot。但它增加了存储和计算开销，因为线程必须为它们访问的每个Slot获取Latches，每个Slot都必须存储Latches数据。DBMS可以使用单模式Latches（即，Spin Latch）来减少元数据和计算开销，代价是牺牲一些并行性。
+- **Slot Latches**：
+  每个Slot都有自己的Latches。这增加了并行性，因为两个线程可以在同一Page上访问不同的Slot。但它增加了存储和计算开销，因为线程必须为它们访问的每个Slot获取Latches，每个Slot都必须存储Latches数据。DBMS可以使用单模式Latches（即，Spin Latch）来减少元数据和计算开销，代价是牺牲一些并行性。
 
 还可以直接使用CAS指令创建一个无Latches的线性探测哈希表。通过尝试将特殊“空”值与我们希望插入的元组进行比较和交换，可以在Slot中插入。如果失败，我们可以探测下一个Slot，直到成功。
 
 
-**5. B+树Latches**
+### B+树Latches
 
 B+树Latches存的挑战在于防止以下两个问题：
 - 线程同时尝试修改节点的内容。
@@ -826,19 +833,146 @@ Latch crabbing/coupling协议允许多个线程同时访问/修改B+树。基本
 
 请注意，读Latches不需要担心“安全”条件。
 
-**Basic Latch Crabbing Protocol**：
+#### Basic Latch Crabbing Protocol
 - **搜索**：从根节点开始向下，重复获取子节点的Latches，然后释放父节点的Latches。
 - **插入/删除**：从根节点开始向下，根据需要获取X Latches。一旦子节点被latched，检查它是否安全。如果子节点安全，释放所有祖先节点的Latches。
 
 从正确性的角度来看，释放Latches的顺序并不重要。然而，从性能的角度来看，最好释放树中较高位置的Latches，因为它们会阻塞对更多叶子节点的访问。
 
-**Improved Latch Crabbing Protocol**：Basic Latch Crabbing Protocol的问题在于，事务总是在每次插入/删除操作时获取根节点的独占Latches。这限制了并行性。相反，我们可以假设需要调整大小（即，分裂/合并节点）的情况很少，因此事务可以获取到叶子节点的共享Latches。并使用读Latches和抓取来到达它并进行每个事务都会假设到达目标叶子节点的路径是安全的，验证。如果叶子节点不安全，那么我们就中止并使用Basic Latch Crabbing Protocol重新开始事务。
+#### Improved Latch Crabbing Protocol
+Basic Latch Crabbing Protocol的问题在于，事务总是在每次插入/删除操作时获取根节点的独占Latches。这限制了并行性。相反，我们可以假设需要调整大小（即，分裂/合并节点）的情况很少，因此事务可以获取到叶子节点的共享Latches。并使用读Latches和抓取来到达它并进行每个事务都会假设到达目标叶子节点的路径是安全的，验证。如果叶子节点不安全，那么我们就中止并使用Basic Latch Crabbing Protocol重新开始事务。
 
 - **搜索**：与之前相同的算法。
 - **插入/删除**：像搜索一样设置读Latches，到达叶子节点，并在叶子节点上设置写Latches。如果叶子节点不安全，释放所有先前的Latches，并使用Basic Latch Crabbing Protocol重新开始事务。
 
-**叶子节点扫描**：上述协议中的线程以“自顶向下”的方式获取Latches。这意味着线程只能从当前节点下方的节点获取Latches。如果所需的Latches不可用，线程必须等待直到它变得可用。鉴于此，永远不可能发生死锁。
+#### 叶子节点扫描
+上述协议中的线程以“自顶向下”的方式获取Latches。这意味着线程只能从当前节点下方的节点获取Latches。如果所需的Latches不可用，线程必须等待直到它变得可用。鉴于此，永远不可能发生死锁。
 
 然而，叶子节点扫描容易受到死锁的影响，因为现在我们有线程同时尝试以两个不同方向获取Latch且其中有独占Latch（例如，线程1尝试删除，线程2进行叶子节点扫描）。索引Latches不支持死锁检测或避免。
 
 因此，程序员处理这个问题的唯一方法是通过编码规范。叶子节点兄弟Latches获取协议必须支持“no-wait”模式。也就是说，B+树代码必须能够处理失败的Latches获取。由于Latches旨在被（相对）短暂持有，如果线程尝试获取叶子节点的Latches，但该Latches不可用，那么它应该快速中止其操作（释放它持有的任何Latches），并重新启动操作。
+
+## 排序与聚合算法
+
+### 查询计划
+数据库系统将SQL编译成查询计划: 操作符组成的树结构.
+数据从叶子流向根节点.
+根节点的输出即为查询结果.
+```sql
+SELECT R.id, S.cdate
+ FROM R JOIN S
+ ON R.id = S.id
+WHERE S.value > 100
+```
+![查询计划](/assets/posts/dbms-query-plan.png)
+
+对于面向磁盘的数据库系统，查询结果不一定能完全放在内存中。
+- 我们将使用buffer pool来实现需要溢写(spill)到磁盘的算法。
+- 我们希望最小化算法的I/O操作, 最大化顺序I/O.
+
+### 排序
+- 在关系模型下，表中的元组无顺序
+- 排序可能用于：ORDER BY、GROUP BY(详见[聚合](#聚合(Aggregations)))、DISTINCT(消除重复)和JOIN操作符
+- 如果需要排序的数据能够完全装入内存，那么DBMS可以使用标准的排序算法（例如，快速排序）
+- 如果数据太大而无法装入内存，那么DBMS需要使用能够按需溢写到磁盘的外部排序，并且优先考虑顺序I/O而不是随机I/O(故快速排序不太合适)
+
+#### Top-N Heap Sort
+如果查询包含带有LIMIT的ORDER BY，那么DBMS使用[堆排序](https://en.wikipedia.org/wiki/Heapsort)，只需要扫描一次数据就能找到前N个元素。
+堆排序的理想情况是当前N个元素都能够装入内存时，这样DBMS只需要在扫描数据时维护一个内存中的排序优先队列（最大/小堆）。
+```sql
+SELECT * FROM enrolled
+ORDER BY sid
+LIMIT 4
+```
+![Top-N Heap Sort](/assets/posts/dbms-heap-sort.png)
+
+#### External Merge Sort
+对于无法完全装入内存的数据的标准排序算法是外部归并排序。它是一种分治排序算法，将数据集分割成多个独立的归并段(run)，然后分别对它们进行排序。它可以按需将归并段(run)溢写(spill)到磁盘，之后逐个将它们读回。该算法由两个阶段组成：
+
+- 阶段#1 – 排序：首先，算法对能够装入主内存的小块数据进行排序，然后将排序后的page写回磁盘。
+- 阶段#2 – 合并：然后，算法将排序后的子文件合并成一个更大的单一文件。
+
+对于每个归并段的values, 有两个选择:
+- 提前物化(early-materialized)，将整个tuple存储到page中
+- 延迟物化(late-materialized)，我们只在排序归并段中存储记录ID，稍后再读取
+
+#### Two-way Merge Sort
+算法的最基本版本是两路归并排序。
+- 排序阶段: 读取每个page(从磁盘或或拷贝已在内存page)，对其进行排序，然后将排序后的版本写回磁盘
+- 合并阶段: 需使用三个buffer pool page。它从磁盘读取两个排序page，并将它们合并到第三个page中。每当第三个page填满时，它就会被写回磁盘，并用一个空page替换。DBMS通常提供配置page大小选项(排序内存/工作内存)
+![Two-way Merge Sort](/assets/posts/dbms-two-way-merge-sort.png)
+如果N是数据page的总数，该算法总共进行$1 + ⌈\log_2 N⌉$次数据遍历（第一次用于排序阶段，然后是$⌈\log_2 N⌉$次用于递归合并阶段）。
+总的I/O成本是2N × （遍历次数），因为每次遍历都需要对每个page进行一次I/O读取和一次I/O写回。
+
+#### General (K-way) Merge Sort
+算法的泛化版本允许DBMS利用多于三个buffer pool page。
+设B是可用的page总数，在排序阶段，算法可以一次读取B个page，并将⌈N/B⌉个排序归并段写回磁盘。合并阶段也可以每次合并多达B-1个归并段，同样使用一个page来合并数据，并根据需要写回磁盘。
+
+在泛化版本中，算法执行$1 + ⌈\log_B−1 ⌈N/B⌉⌉$次遍历（一次用于排序阶段，$\log_B−1 ⌈N/B⌉$次用于合并阶段）。
+总的I/O成本是2N × （遍历次数），因为它在每次遍历中都需要对每个page进行一次读取和写回。
+
+#### 双缓冲优化
+外部归并排序的一个优化是预取下一个归并段并在后台存储到第二个缓冲区中，同时系统处理当前归并段。
+这通过持续利用磁盘减少了每个步骤的I/O请求等待时间。这种优化需要使用多线程，因为预取应该在当前归并段的计算发生时进行。
+
+#### 比较优化
+代码特化(Code Specialization)经常用于加速排序比较。区别于将比较器作为函数指针提供给排序算法，可以将比较逻辑硬编码到特定键类型的排序方法，节省指针和函数调用等开销。C++中的模板特化就是一个例子。
+
+另一种优化（针对基于字符串的比较）是后缀截断。对于长VARCHAR键，先尝试用其二进制前缀([如Rabin–Karp算法的滚动哈希](https://zh.wikipedia.org/wiki/旋转哈希))进行相等检查，如果前缀相等，则回退到较慢的字符串比较。
+
+#### 使用B+树
+DBMS可使用已有的B+树索引来辅助排序。
+- 如果索引是聚簇索引，DBMS可以直接遍历B+树。由于索引是聚簇的，数据将以正确的顺序存储，因此I/O访问将是顺序的。这意味着它总是比外部归并排序更好，因为不需要进行计算。
+- 如果索引是非聚簇的，遍历树几乎总是更糟糕的，因为每条记录可能存储在任何page上，所以几乎所有的记录访问都需要(随机)磁盘读取。
+
+![使用B+树索引辅助排序](/assets/posts/dbms-sort-by-using-index.png)
+因此优化器必须评估不同查询计划的I/O，并决定是否使用索引。
+
+### 聚合(Aggregations)
+查询计划中的聚合操作符(GROUP BY)将一个或多个元组的值合并为单个标量值(AVG，COUNT，MIN，MAX，SUM, DISTINCT)。
+为了减少I/O消耗，实现聚合有两种方法：（1）排序和（2）哈希。
+
+#### 排序聚合
+如果聚合要求有序(有ORDER BY):
+- DBMS首先根据GROUP BY键对元组进行排序：如果所有数据都能装入缓冲池，它可以使用内存中的排序算法（例如，快速排序），或者如果数据大小超过内存，它可以使用外部归并排序算法。
+- 然后DBMS对排序后的数据进行顺序扫描以计算聚合: 
+  - DISTINCT: 丢弃重复
+  - GROUP BY: 执行聚合计算
+
+```sql
+SELECT DISTINCT cid
+ FROM enrolled
+WHERE grade IN ('B','C')
+ORDER BY cid
+```
+![Sorting Aggregation](/assets/posts/dbms-sorting-aggregation.png)
+在执行排序聚合时，重要的是要合理安排查询操作以提高效率。例如，如果查询需要过滤，最好先执行过滤(谓词/过滤下推)，然后对过滤后的数据进行排序，以减少需要排序的数据量。
+
+#### 哈希聚合
+如果聚合无需有序，哈希计算聚合通常比排序计算量更低：
+DBMS在扫描表时填充一个临时哈希表。对于每条记录，检查哈希表中是否已经有条目，并进行适当的修改:
+- DISTINCT: 丢弃重复
+- GROUP BY: 执行聚合计算
+
+如果哈希表的大小太大而无法装入内存，那么DBMS必须将其溢写到磁盘。完成这一过程有两个阶段：
+- 阶段#1 – 分区：使用哈希函数h1根据目标哈希键将元组分区到磁盘上。这将把所有匹配的元组放入同一个分区。假设总共有B个缓冲区，我们将有B-1个输出缓冲区用于分区，1个缓冲区用于输入数据。如果任何分区已满，DBMS将将其溢写到磁盘。
+- 阶段#2 – 重哈希(到内存)：对于磁盘上的每个分区，将其读入内存，并基于第二个哈希函数h2（其中h1 ≠ h2）构建内存中的哈希表(这假设每个分区都能装入内存)。然后遍历这个哈希表的每个桶，将匹配的元组集中起来以计算聚合。由于经过了阶段1的h1相同键会在统一分区，当步骤2中的内存哈希表无法插入新条目时可以直接丢弃旧条目，因为插入新条目说明救条目已经完成聚合计算。
+
+```sql
+SELECT DISTINCT cid
+ FROM enrolled
+WHERE grade IN ('B','C')
+```
+![External Hashing Aggregation: Partition](/assets/posts/dbms-external-hashing-aggregation-partition.png)
+![External Hashing Aggregation: Rehash](/assets/posts/dbms-external-hashing-aggregation-rehash.png)
+在重哈希阶段，DBMS可以存储形式为（GroupByKey→RunningValue）的对来计算聚合。RunningValue的内容取决于聚合函数，如AVG()应为COUNT和SUM.
+```sql
+SELECT cid, AVG(s.gpa)
+ FROM student AS s, enrolled AS e
+WHERE s.sid = e.sid
+GROUP BY cid
+```
+![Hashing Summarization](/assets/posts/dbms-hashing-summarization.png)
+将新元组插入哈希表的方式：
+- 如果找到匹配的GroupByKey，则相应地更新RunningValue。
+- 否则插入一个新的键值对（GroupByKey→RunningValue）。
