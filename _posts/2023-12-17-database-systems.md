@@ -872,7 +872,7 @@ WHERE S.value > 100
 
 ### 排序
 - 在关系模型下，表中的元组无顺序
-- 排序可能用于：ORDER BY、GROUP BY(详见[聚合](#聚合(Aggregations)))、DISTINCT(消除重复)和JOIN操作符
+- 排序可能用于：ORDER BY、GROUP BY(详见[聚合](#聚合))、DISTINCT(消除重复)和JOIN操作符
 - 如果需要排序的数据能够完全装入内存，那么DBMS可以使用标准的排序算法（例如，快速排序）
 - 如果数据太大而无法装入内存，那么DBMS需要使用能够按需溢写到磁盘的外部排序，并且优先考虑顺序I/O而不是随机I/O(故快速排序不太合适)
 
@@ -928,8 +928,8 @@ DBMS可使用已有的B+树索引来辅助排序。
 ![使用B+树索引辅助排序](/assets/posts/dbms-sort-by-using-index.png)
 因此优化器必须评估不同查询计划的I/O，并决定是否使用索引。
 
-### 聚合(Aggregations)
-查询计划中的聚合操作符(GROUP BY)将一个或多个元组的值合并为单个标量值(AVG，COUNT，MIN，MAX，SUM, DISTINCT)。
+### 聚合
+查询计划中的聚合操作符将一个或多个元组的值合并为单个标量值(GROUP BY, AVG，COUNT，MIN，MAX，SUM, DISTINCT)。
 为了减少I/O消耗，实现聚合有两种方法：（1）排序和（2）哈希。
 
 #### 排序聚合
@@ -956,7 +956,7 @@ DBMS在扫描表时填充一个临时哈希表。对于每条记录，检查哈�
 
 如果哈希表的大小太大而无法装入内存，那么DBMS必须将其溢写到磁盘。完成这一过程有两个阶段：
 - 阶段#1 – 分区：使用哈希函数h1根据目标哈希键将元组分区到磁盘上。这将把所有匹配的元组放入同一个分区。假设总共有B个缓冲区，我们将有B-1个输出缓冲区用于分区，1个缓冲区用于输入数据。如果任何分区已满，DBMS将将其溢写到磁盘。
-- 阶段#2 – 重哈希(到内存)：对于磁盘上的每个分区，将其读入内存，并基于第二个哈希函数h2（其中h1 ≠ h2）构建内存中的哈希表(这假设每个分区都能装入内存)。然后遍历这个哈希表的每个桶，将匹配的元组集中起来以计算聚合。由于经过了阶段1的h1相同键会在统一分区，当步骤2中的内存哈希表无法插入新条目时可以直接丢弃旧条目，因为插入新条目说明救条目已经完成聚合计算。
+- 阶段#2 – 重哈希(到内存)：对于磁盘上的每个分区，将其读入内存，并基于第二个哈希函数h2（其中h1 ≠ h2）构建内存中的哈希表(这假设每个分区都能装入内存)。然后遍历这个哈希表的每个桶，将匹配的元组集中起来以计算聚合。由于经过了阶段#1的h1相同键会在统一分区，当阶段#2中的内存哈希表无法插入新条目时可以直接丢弃旧条目，因为插入新条目说明旧条目已经完成聚合计算。
 
 ```sql
 SELECT DISTINCT cid
@@ -964,6 +964,7 @@ SELECT DISTINCT cid
 WHERE grade IN ('B','C')
 ```
 ![External Hashing Aggregation: Partition](/assets/posts/dbms-external-hashing-aggregation-partition.png)
+
 ![External Hashing Aggregation: Rehash](/assets/posts/dbms-external-hashing-aggregation-rehash.png)
 在重哈希阶段，DBMS可以存储形式为（GroupByKey→RunningValue）的对来计算聚合。RunningValue的内容取决于聚合函数，如AVG()应为COUNT和SUM.
 ```sql
